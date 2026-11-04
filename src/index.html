@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>A Letter For You</title>
+<meta name="description" content="Write a personal letter, add songs, and send a keepsake that opens like an envelope and plays like a record.">
+<meta name="theme-color" content="#fdedad">
+<!--@gift-only--><meta name="robots" content="noindex, nofollow"><!--@/gift-only-->
+<link rel="icon" type="image/png" href="/img/favicon-64.png">
+<!--@home-only--><link rel="preload" href="/fonts/im-fell-english-latin-400-italic.woff2" as="font" type="font/woff2" crossorigin><!--@/home-only-->
+<link rel="stylesheet" href="/css/app.css">
+<script defer src="/js/app.js"></script>
+</head>
+<body>
+<h2 class="sr-only">A digital keepsake letter: envelope opening, a personal message, and a shared vinyl record playlist.</h2>
+<div class="app" id="app">
+<!--@home-only-->
+<div class="screen enter" data-static="home">
+  <div class="home-card">
+    <div class="title-frame">
+      {{pic name="frame" class="title-frame-img" alt="Decorative frame" sizes="(max-width:560px) 100vw, 520px" fetchpriority="high"}}
+      <div class="title-frame-text">My Love For You</div>
+    </div>
+    <p class="home-tagline">Write a personal letter, add one to ten songs, and send a keepsake that opens like an envelope and plays like a record.</p>
+    <div class="row" style="margin-top:40px">
+      <button class="btn" id="btn-create" type="button">Write a Letter</button>
+      <button class="btn ghost" id="btn-code" type="button">I received a gift code</button>
+    </div>
+  </div>
+</div>
+<!--@/home-only-->
+<!--@gift-only-->
+<div class="screen enter">
+  <div class="home-card" role="status" aria-live="polite">
+    <div class="brand">A Letter For You</div>
+    <p><span class="loading-dot"></span>Unsealing your gift&hellip;</p>
+  </div>
+</div>
+<!--@/gift-only-->
+</div>
+{{pic name="corner-vine" class="corner-vine" alt="" aria-hidden="true" sizes="(max-width:560px) 150px, 258px" fetchpriority="low"}}
+{{pic name="corner-vine-left" class="corner-vine corner-vine-left" alt="" aria-hidden="true" sizes="(max-width:560px) 150px, 258px" fetchpriority="low"}}
+<div class="floral-overlay" aria-hidden="true"></div>
+<div id="toast" class="toast" role="status" aria-live="polite"></div>
+<script type="application/json" id="asset-manifest">{{manifest}}</script>
+</body>
+</html>

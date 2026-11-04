@@ -1,0 +1,250 @@
+[
+  {
+    "file": "frame-520",
+    "width": 520,
+    "original": 1464094,
+    "avif": 31674,
+    "webp": 44466,
+    "pngFallback": 46482
+  },
+  {
+    "file": "frame-1040",
+    "width": 1040,
+    "original": 1464094,
+    "avif": 80779,
+    "webp": 133972,
+    "pngFallback": 166136
+  },
+  {
+    "file": "corner-vine-280",
+    "width": 280,
+    "original": 170779,
+    "avif": 34630,
+    "webp": 43398,
+    "pngFallback": 29908
+  },
+  {
+    "file": "corner-vine-374",
+    "width": 374,
+    "original": 170779,
+    "avif": 35024,
+    "webp": 52558,
+    "pngFallback": 45170
+  },
+  {
+    "file": "corner-vine-left-360",
+    "width": 360,
+    "original": 1067366,
+    "avif": 59005,
+    "webp": 72160,
+    "pngFallback": 51594
+  },
+  {
+    "file": "corner-vine-left-520",
+    "width": 520,
+    "original": 1067366,
+    "avif": 99254,
+    "webp": 132906,
+    "pngFallback": 98257
+  },
+  {
+    "file": "cursor-1-128",
+    "width": 128,
+    "original": 161181,
+    "avif": 3417,
+    "webp": 4476,
+    "pngFallback": 5083
+  },
+  {
+    "file": "cursor-1-256",
+    "width": 256,
+    "original": 161181,
+    "avif": 8738,
+    "webp": 12300,
+    "pngFallback": 14673
+  },
+  {
+    "file": "cursor-2-128",
+    "width": 128,
+    "original": 1410891,
+    "avif": 4131,
+    "webp": 5724,
+    "pngFallback": 5935
+  },
+  {
+    "file": "cursor-2-256",
+    "width": 256,
+    "original": 1410891,
+    "avif": 11096,
+    "webp": 15972,
+    "pngFallback": 18270
+  },
+  {
+    "file": "cursor-3-128",
+    "width": 128,
+    "original": 375767,
+    "avif": 8523,
+    "webp": 8996,
+    "pngFallback": 9869
+  },
+  {
+    "file": "cursor-3-256",
+    "width": 256,
+    "original": 375767,
+    "avif": 21827,
+    "webp": 24190,
+    "pngFallback": 31727
+  },
+  {
+    "file": "cursor-4-128",
+    "width": 128,
+    "original": 306304,
+    "avif": 7800,
+    "webp": 8512,
+    "pngFallback": 11582
+  },
+  {
+    "file": "cursor-4-256",
+    "width": 256,
+    "original": 306304,
+    "avif": 18414,
+    "webp": 22832,
+    "pngFallback": 38755
+  },
+  {
+    "file": "cursor-5-128",
+    "width": 128,
+    "original": 345934,
+    "avif": 8776,
+    "webp": 9060,
+    "pngFallback": 8329
+  },
+  {
+    "file": "cursor-5-256",
+    "width": 256,
+    "original": 345934,
+    "avif": 21241,
+    "webp": 23168,
+    "pngFallback": 26104
+  },
+  {
+    "file": "cursor-6-128",
+    "width": 128,
+    "original": 72661,
+    "avif": 4718,
+    "webp": 4444,
+    "pngFallback": 3257
+  },
+  {
+    "file": "cursor-6-256",
+    "width": 256,
+    "original": 72661,
+    "avif": 9763,
+    "webp": 10502,
+    "pngFallback": 6870
+  },
+  {
+    "file": "envelope-closed-400",
+    "width": 400,
+    "original": 502312,
+    "avif": 12241,
+    "webp": 15468,
+    "pngFallback": 64518
+  },
+  {
+    "file": "envelope-closed-577",
+    "width": 577,
+    "original": 502312,
+    "avif": 23244,
+    "webp": 30808,
+    "pngFallback": 127245
+  },
+  {
+    "file": "envelope-open-421",
+    "width": 421,
+    "original": 181039,
+    "avif": 16615,
+    "webp": 22692,
+    "pngFallback": 63210
+  },
+  {
+    "file": "vinyl-record-256",
+    "width": 256,
+    "original": 562234,
+    "avif": 24799,
+    "webp": 26638,
+    "pngFallback": 47633
+  },
+  {
+    "file": "vinyl-record-440",
+    "width": 440,
+    "original": 562234,
+    "avif": 57451,
+    "webp": 64692,
+    "pngFallback": 130950
+  },
+  {
+    "file": "angel-240",
+    "width": 240,
+    "original": 243723,
+    "avif": 18072,
+    "webp": 21504,
+    "pngFallback": 24611
+  },
+  {
+    "file": "angel-360",
+    "width": 360,
+    "original": 243723,
+    "avif": 27930,
+    "webp": 36934,
+    "pngFallback": 46234
+  },
+  {
+    "file": "minstrel-260",
+    "width": 260,
+    "original": 240051,
+    "avif": 13740,
+    "webp": 18544,
+    "pngFallback": 28787
+  },
+  {
+    "file": "minstrel-390",
+    "width": 390,
+    "original": 240051,
+    "avif": 22758,
+    "webp": 32496,
+    "pngFallback": 56489
+  },
+  {
+    "file": "floral-tile-750",
+    "width": 750,
+    "original": 531988,
+    "avif": 144475,
+    "webp": 189268,
+    "pngFallback": 134351
+  },
+  {
+    "file": "letter-top-421",
+    "width": 421,
+    "original": 441015,
+    "avif": 35411,
+    "webp": 51678,
+    "pngFallback": 73630
+  },
+  {
+    "file": "letter-bottom-421",
+    "width": 421,
+    "original": 441015,
+    "avif": 36008,
+    "webp": 53000,
+    "pngFallback": 70350
+  },
+  {
+    "file": "letter-ext-421",
+    "width": 421,
+    "original": 441015,
+    "avif": 11485,
+    "webp": 15396,
+    "pngFallback": 21356
+  }
+]

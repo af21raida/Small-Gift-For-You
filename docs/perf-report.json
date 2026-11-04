@@ -1,0 +1,262 @@
+{
+  "generatedAt": "2026-11-04T01:30:19.219Z",
+  "runs": 3,
+  "note": "Local server + CDP throttling + 4x CPU slowdown; not a live Netlify test.",
+  "results": {
+    "Slow 4G (1.6 Mbps, 150 ms RTT) | mobile 390x844@2x": {
+      "before": {
+        "lcpMs": 28656,
+        "lcpElement": "IMG.title-frame-img",
+        "fcpMs": 440,
+        "cls": 0.0491,
+        "loadEventMs": 28615,
+        "requests": 15,
+        "transferKB": 5787.4,
+        "imageRequests": 10,
+        "imageKB": 5770.7,
+        "audioRequests": 0,
+        "fontRequests": 2,
+        "failed": [
+          "fonts/celandine-bold.woff2",
+          "fonts/celandine-regular.woff2"
+        ],
+        "imageList": [
+          "corner-vine.png 167.0KB",
+          "corner-vine-left.png 1042.6KB",
+          "cursor-1.png 157.6KB",
+          "cursor-2.png 1378.0KB",
+          "cursor-3.png 367.2KB",
+          "cursor-4.png 299.3KB",
+          "cursor-5.png 338.0KB",
+          "cursor-6.png 71.2KB",
+          "floral-overlay.png 519.7KB",
+          "frame.png 1430.0KB"
+        ],
+        "lcpMsAllRuns": [
+          28652,
+          28656,
+          28660
+        ]
+      },
+      "after": {
+        "lcpMs": 2032,
+        "lcpElement": "IMG.title-frame-img",
+        "fcpMs": 848,
+        "cls": 0,
+        "loadEventMs": 2388,
+        "requests": 11,
+        "transferKB": 451.3,
+        "imageRequests": 7,
+        "imageKB": 359.5,
+        "audioRequests": 0,
+        "fontRequests": 1,
+        "failed": [],
+        "imageList": [
+          "frame-1040.avif 79.7KB",
+          "corner-vine-374.avif 35.0KB",
+          "corner-vine-left-360.avif 58.4KB",
+          "floral-tile-750.avif 141.9KB",
+          "envelope-closed-577.avif 23.5KB",
+          "envelope-open-421.avif 17.0KB",
+          "favicon-64.png 4.0KB"
+        ],
+        "lcpMsAllRuns": [
+          2024,
+          2032,
+          2064
+        ]
+      }
+    },
+    "Slow 4G (1.6 Mbps, 150 ms RTT) | desktop 1280x800": {
+      "before": {
+        "lcpMs": 28720,
+        "lcpElement": "IMG.title-frame-img",
+        "fcpMs": 488,
+        "cls": 0.0299,
+        "loadEventMs": 28635,
+        "requests": 15,
+        "transferKB": 5787.4,
+        "imageRequests": 10,
+        "imageKB": 5770.7,
+        "audioRequests": 0,
+        "fontRequests": 2,
+        "failed": [
+          "fonts/celandine-regular.woff2",
+          "fonts/celandine-bold.woff2"
+        ],
+        "imageList": [
+          "corner-vine.png 167.0KB",
+          "corner-vine-left.png 1042.6KB",
+          "cursor-1.png 157.6KB",
+          "cursor-2.png 1378.0KB",
+          "cursor-3.png 367.2KB",
+          "cursor-4.png 299.3KB",
+          "cursor-5.png 338.0KB",
+          "cursor-6.png 71.2KB",
+          "frame.png 1430.0KB",
+          "floral-overlay.png 519.7KB"
+        ],
+        "lcpMsAllRuns": [
+          28712,
+          28720,
+          28736
+        ]
+      },
+      "after": {
+        "lcpMs": 1240,
+        "lcpElement": "IMG.title-frame-img",
+        "fcpMs": 784,
+        "cls": 0,
+        "loadEventMs": 2120,
+        "requests": 17,
+        "transferKB": 433.5,
+        "imageRequests": 13,
+        "imageKB": 341.7,
+        "audioRequests": 0,
+        "fontRequests": 1,
+        "failed": [],
+        "imageList": [
+          "frame-520.avif 31.7KB",
+          "corner-vine-280.avif 34.6KB",
+          "corner-vine-left-360.avif 58.4KB",
+          "floral-tile-750.avif 141.9KB",
+          "favicon-64.png 4.0KB",
+          "cursor-1-128.avif 4.1KB",
+          "cursor-2-128.avif 4.8KB",
+          "cursor-3-128.avif 9.1KB",
+          "cursor-4-128.avif 8.4KB",
+          "cursor-5-128.avif 9.4KB",
+          "cursor-6-128.avif 5.4KB",
+          "envelope-closed-400.avif 12.7KB",
+          "envelope-open-421.avif 17.0KB"
+        ],
+        "lcpMsAllRuns": [
+          1228,
+          1240,
+          1324
+        ]
+      }
+    },
+    "Fast 3G (0.8 Mbps, 300 ms RTT) | mobile 390x844@2x": {
+      "before": {
+        "lcpMs": 57204,
+        "lcpElement": "IMG.title-frame-img",
+        "fcpMs": 824,
+        "cls": 0.0491,
+        "loadEventMs": 57155,
+        "requests": 15,
+        "transferKB": 5787.4,
+        "imageRequests": 10,
+        "imageKB": 5770.7,
+        "audioRequests": 0,
+        "fontRequests": 2,
+        "failed": [
+          "fonts/celandine-bold.woff2",
+          "fonts/celandine-regular.woff2"
+        ],
+        "imageList": [
+          "corner-vine.png 167.0KB",
+          "corner-vine-left.png 1042.6KB",
+          "cursor-1.png 157.6KB",
+          "cursor-2.png 1378.0KB",
+          "cursor-3.png 367.2KB",
+          "cursor-4.png 299.3KB",
+          "cursor-5.png 338.0KB",
+          "cursor-6.png 71.2KB",
+          "floral-overlay.png 519.7KB",
+          "frame.png 1430.0KB"
+        ],
+        "lcpMsAllRuns": [
+          57184,
+          57204,
+          57204
+        ]
+      },
+      "after": {
+        "lcpMs": 3924,
+        "lcpElement": "IMG.title-frame-img",
+        "fcpMs": 1424,
+        "cls": 0,
+        "loadEventMs": 4664,
+        "requests": 11,
+        "transferKB": 451.3,
+        "imageRequests": 7,
+        "imageKB": 359.5,
+        "audioRequests": 0,
+        "fontRequests": 1,
+        "failed": [],
+        "imageList": [
+          "frame-1040.avif 79.7KB",
+          "corner-vine-374.avif 35.0KB",
+          "corner-vine-left-360.avif 58.4KB",
+          "floral-tile-750.avif 141.9KB",
+          "favicon-64.png 4.0KB",
+          "envelope-closed-577.avif 23.5KB",
+          "envelope-open-421.avif 17.0KB"
+        ],
+        "lcpMsAllRuns": [
+          3888,
+          3924,
+          3928
+        ]
+      }
+    },
+    "repeatVisit": {
+      "before": {
+        "lcpMs": 808,
+        "lcpElement": "IMG.title-frame-img",
+        "fcpMs": 520,
+        "cls": 0,
+        "loadEventMs": 728,
+        "requests": 14,
+        "transferKB": 2.5,
+        "imageRequests": 10,
+        "imageKB": 2.3,
+        "audioRequests": 0,
+        "fontRequests": 2,
+        "failed": [
+          "fonts/celandine-bold.woff2",
+          "fonts/celandine-regular.woff2"
+        ],
+        "imageList": [
+          "corner-vine.png 0.2KB",
+          "corner-vine-left.png 0.2KB",
+          "cursor-1.png 0.2KB",
+          "cursor-2.png 0.2KB",
+          "cursor-3.png 0.2KB",
+          "cursor-4.png 0.2KB",
+          "cursor-5.png 0.2KB",
+          "cursor-6.png 0.2KB",
+          "floral-overlay.png 0.2KB",
+          "frame.png 0.2KB"
+        ]
+      },
+      "after": {
+        "lcpMs": 440,
+        "lcpElement": "IMG.corner-vine",
+        "fcpMs": 440,
+        "cls": 0,
+        "loadEventMs": 311,
+        "requests": 11,
+        "transferKB": 3.4,
+        "imageRequests": 7,
+        "imageKB": 0,
+        "audioRequests": 0,
+        "fontRequests": 1,
+        "failed": [
+          "fonts/im-fell-english-latin-400-italic.8fc678575e.woff2",
+          "img/favicon-64.a0e33256b2.png"
+        ],
+        "imageList": [
+          "frame-1040.avif 0.0KB",
+          "corner-vine-374.avif 0.0KB",
+          "corner-vine-left-360.avif 0.0KB",
+          "floral-tile-750.avif 0.0KB",
+          "favicon-64.png 0.0KB",
+          "envelope-closed-577.avif 0.0KB",
+          "envelope-open-421.avif 0.0KB"
+        ]
+      }
+    }
+  }
+}
