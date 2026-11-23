@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { generateCode, isCode, CODE_ALPHABET, CODE_LEN, cleanHttpsUrl, validateGiftInput, sniffImage, LIMITS } from '../../netlify/lib/validate.mjs';
+import { generateCode, isCode, CODE_ALPHABET, CODE_LEN, cleanHttpsUrl, validateGiftInput, sniffImage, sniffAudio, LIMITS } from '../../netlify/lib/validate.mjs';
 
 const base = () => ({ message: 'hi', songs: [{ title: 'A', artist: 'B', url: 'builtin:song-1' }], photos: [], manageKey: 'm'.repeat(43), idempotencyKey: 'i'.repeat(24) });
 
@@ -60,4 +60,30 @@ test('sniffImage identifies by magic bytes', () => {
   assert.equal(sniffImage(Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"></svg>')), null);
   assert.equal(sniffImage(Buffer.from('GIF89a......')), null);
   assert.equal(sniffImage(Buffer.alloc(0)), null);
+});
+
+test('sniffAudio identifies each supported format by magic bytes', () => {
+  const pad = (a) => Buffer.concat([Buffer.from(a), Buffer.alloc(16)]);
+  assert.equal(sniffAudio(pad(Buffer.from('ID3\x03'))).mime, 'audio/mpeg');
+  assert.equal(sniffAudio(pad([0xff, 0xfb, 0x90, 0x00])).mime, 'audio/mpeg');             // MPEG-1 layer III frame
+  assert.equal(sniffAudio(pad([0xff, 0xf1, 0x50, 0x80])).mime, 'audio/aac');              // ADTS AAC
+  assert.equal(sniffAudio(Buffer.concat([Buffer.from([0, 0, 0, 0x20]), Buffer.from('ftypM4A '), Buffer.alloc(8)])).mime, 'audio/mp4');
+  assert.equal(sniffAudio(pad(Buffer.from('OggS'))).mime, 'audio/ogg');
+  assert.equal(sniffAudio(Buffer.concat([Buffer.from('RIFF'), Buffer.alloc(4), Buffer.from('WAVEfmt ')])).mime, 'audio/wav');
+  assert.equal(sniffAudio(pad([0x1a, 0x45, 0xdf, 0xa3])).mime, 'audio/webm');
+});
+test('sniffAudio rejects non-audio content', () => {
+  for (const bad of ['<html><body>hi</body></html>', 'GIF89a..........', '#!/bin/sh\nrm -rf /', 'PK\x03\x04 zip data....']) assert.equal(sniffAudio(Buffer.from(bad)), null, bad);
+  assert.equal(sniffAudio(Buffer.alloc(4)), null);
+  assert.equal(sniffAudio(Buffer.from([0xff, 0xe8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])), null);   // reserved MPEG version
+  assert.equal(sniffAudio(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0])), null); // a PNG is not audio
+});
+test('validateGiftInput: songs uploaded from a device are referenced by id', () => {
+  const id = '11111111-2222-4333-8444-555555555555';
+  const v = validateGiftInput({ ...base(), songs: [{ title: 'Mine', artist: 'Me', id }, { title: 'A', artist: '', url: 'builtin:song-1' }] });
+  assert.deepEqual(v.songs[0], { title: 'Mine', artist: 'Me', id });
+  assert.equal(v.songs.length, 2);
+  assert.throws(() => validateGiftInput({ ...base(), songs: [{ title: 'x', id }, { title: 'y', id }] }));          // same upload twice
+  assert.throws(() => validateGiftInput({ ...base(), songs: [{ title: 'x', id: 'not-a-uuid' }] }));
+  assert.throws(() => validateGiftInput({ ...base(), songs: [{ title: '', id }] }));
 });

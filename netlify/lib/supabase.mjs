@@ -4,7 +4,8 @@
 
 import { ApiError } from './http.mjs';
 
-export const BUCKET = 'gift-photos';
+export const BUCKET = 'gift-photos';            // photos
+export const AUDIO_BUCKET = 'gift-audio';       // songs uploaded from the creator's device
 
 export function config(env = process.env) {
   const url = (env.SUPABASE_URL || '').replace(/\/+$/, '');
@@ -42,8 +43,8 @@ export async function rpc(c, fn, args) {
 
 const encPath = (p) => p.split('/').map(encodeURIComponent).join('/');
 
-export async function uploadObject(c, path, bytes, contentType) {
-  const res = await upstream(fetch(`${c.url}/storage/v1/object/${BUCKET}/${encPath(path)}`, {
+export async function uploadObject(c, path, bytes, contentType, bucket = BUCKET) {
+  const res = await upstream(fetch(`${c.url}/storage/v1/object/${bucket}/${encPath(path)}`, {
     method: 'POST',
     headers: headers(c, { 'Content-Type': contentType, 'x-upsert': 'false', 'Cache-Control': 'max-age=3600' }),
     body: bytes,
@@ -57,10 +58,10 @@ export async function uploadObject(c, path, bytes, contentType) {
 }
 
 /** Returns Map(path -> absolute signed URL) for the paths that could be signed. */
-export async function signObjects(c, paths, expiresIn = 3600) {
+export async function signObjects(c, paths, expiresIn = 3600, bucket = BUCKET) {
   const out = new Map();
   if (!paths.length) return out;
-  const res = await upstream(fetch(`${c.url}/storage/v1/object/sign/${BUCKET}`, {
+  const res = await upstream(fetch(`${c.url}/storage/v1/object/sign/${bucket}`, {
     method: 'POST',
     headers: headers(c, { 'Content-Type': 'application/json' }),
     body: JSON.stringify({ expiresIn, paths }),
@@ -76,12 +77,52 @@ export async function signObjects(c, paths, expiresIn = 3600) {
   return out;
 }
 
-export async function removeObjects(c, paths) {
+export async function removeObjects(c, paths, bucket = BUCKET) {
   if (!paths || !paths.length) return;
-  const res = await upstream(fetch(`${c.url}/storage/v1/object/${BUCKET}`, {
+  const res = await upstream(fetch(`${c.url}/storage/v1/object/${bucket}`, {
     method: 'DELETE',
     headers: headers(c, { 'Content-Type': 'application/json' }),
     body: JSON.stringify({ prefixes: paths }),
   }));
   if (!res.ok) console.error(`[supabase] storage remove -> HTTP ${res.status}`);
+}
+
+/**
+ * One-time signed upload URL: lets the browser send a large file straight to Supabase Storage (Netlify Functions
+ * cannot accept request bodies above ~6 MB). The URL carries its own token and is valid for ONE object path only;
+ * the bucket's own file-size and MIME limits still apply, and the server re-verifies the file before it is usable.
+ */
+export async function createSignedUpload(c, bucket, path) {
+  const res = await upstream(fetch(`${c.url}/storage/v1/object/upload/sign/${bucket}/${encPath(path)}`, {
+    method: 'POST',
+    headers: headers(c, { 'Content-Type': 'application/json' }),
+    body: '{}',
+  }));
+  if (!res.ok) { console.error(`[supabase] storage upload-sign -> HTTP ${res.status}`); throw new ApiError(502, 'upstream_error'); }
+  const data = await res.json();
+  const rel = data && (data.url || data.signedURL);
+  if (typeof rel !== 'string') throw new ApiError(502, 'upstream_error');
+  if (/^https?:\/\//.test(rel)) return rel;
+  return `${c.url}/storage/v1${rel.startsWith('/storage/v1') ? rel.slice('/storage/v1'.length) : rel}`;
+}
+
+/** Read the first bytes (and total size) of a stored object with the service key. Returns null if it does not exist. */
+export async function peekObject(c, bucket, path, n = 64) {
+  const res = await upstream(fetch(`${c.url}/storage/v1/object/authenticated/${bucket}/${encPath(path)}`, {
+    headers: headers(c, { Range: `bytes=0-${n - 1}` }),
+  }));
+  if (res.status === 404 || res.status === 400) { try { await res.body.cancel(); } catch {} return null; }
+  if (!res.ok) { console.error(`[supabase] storage peek -> HTTP ${res.status}`); throw new ApiError(502, 'upstream_error'); }
+  const reader = res.body.getReader();
+  const parts = []; let got = 0;
+  while (got < n) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    parts.push(value); got += value.length;
+  }
+  try { await reader.cancel(); } catch {}
+  const head = Buffer.concat(parts.map((p) => Buffer.from(p))).subarray(0, n);
+  const cr = /\/(\d+)\s*$/.exec(res.headers.get('content-range') || '');
+  const size = cr ? Number(cr[1]) : Number(res.headers.get('content-length') || 0);
+  return { head, size };
 }

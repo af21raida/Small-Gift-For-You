@@ -1,7 +1,8 @@
 -- =============================================================================
 -- My Love For You — Supabase schema
 --
--- Run once in the Supabase SQL editor (or `psql`). Safe to re-run (idempotent).
+-- Run once in the Supabase SQL editor (or `psql`). Safe to re-run (idempotent) — re-run it whenever this file changes
+-- (it also upgrades an existing install: e.g. 2026-11 added song uploads: table audio_files + bucket gift-audio).
 --
 -- SECURITY MODEL
 --   * The browser NEVER talks to Supabase directly. All access goes through Netlify Functions,
@@ -49,6 +50,20 @@ create table if not exists public.photos (
 create index if not exists photos_gift_id_idx on public.photos (gift_id);
 create index if not exists photos_orphans_idx on public.photos (created_at) where gift_id is null;
 
+-- Songs uploaded from the creator's device (private bucket `gift-audio`). A row is created when an upload is
+-- authorised; `committed` flips to true once the server has checked the stored file.
+create table if not exists public.audio_files (
+  id            uuid primary key default gen_random_uuid(),
+  storage_path  text not null unique,
+  mime          text not null check (mime in ('audio/mpeg','audio/mp4','audio/aac','audio/ogg','audio/wav','audio/webm')),
+  bytes         integer not null check (bytes > 0 and bytes <= 10000000),
+  committed     boolean not null default false,
+  gift_id       uuid references public.gifts(id) on delete set null,
+  created_at    timestamptz not null default now()
+);
+create index if not exists audio_files_gift_id_idx on public.audio_files (gift_id);
+create index if not exists audio_files_orphans_idx on public.audio_files (created_at) where gift_id is null;
+
 create table if not exists public.rate_limits (
   bucket       text not null,
   window_start timestamptz not null,
@@ -62,6 +77,8 @@ create table if not exists public.rate_limits (
 alter table public.gifts       enable row level security;
 alter table public.photos      enable row level security;
 alter table public.rate_limits enable row level security;
+alter table public.audio_files enable row level security;
+alter table public.audio_files force row level security;
 alter table public.gifts       force row level security;
 alter table public.photos      force row level security;
 alter table public.rate_limits force row level security;
@@ -69,10 +86,10 @@ alter table public.rate_limits force row level security;
 do $$
 begin
   if exists (select 1 from pg_roles where rolname = 'anon') then
-    execute 'revoke all on public.gifts, public.photos, public.rate_limits from anon';
+    execute 'revoke all on public.gifts, public.photos, public.rate_limits, public.audio_files from anon';
   end if;
   if exists (select 1 from pg_roles where rolname = 'authenticated') then
-    execute 'revoke all on public.gifts, public.photos, public.rate_limits from authenticated';
+    execute 'revoke all on public.gifts, public.photos, public.rate_limits, public.audio_files from authenticated';
   end if;
 end $$;
 
@@ -109,6 +126,50 @@ as $$
 $$;
 
 -- ---------------------------------------------------------------------------
+-- Audio uploads
+-- ---------------------------------------------------------------------------
+create or replace function public.register_audio(p_id uuid, p_path text, p_mime text, p_bytes int, p_committed boolean)
+returns uuid
+language sql
+security definer
+set search_path = public, pg_temp
+as $$
+  insert into public.audio_files (id, storage_path, mime, bytes, committed) values (p_id, p_path, p_mime, p_bytes, p_committed) returning id;
+$$;
+
+-- Look up an upload that is still usable (younger than 24 h).
+create or replace function public.audio_info(p_id uuid)
+returns table (path text, mime text, committed boolean, attached boolean)
+language sql
+security definer
+set search_path = public, pg_temp
+as $$
+  select a.storage_path, a.mime, a.committed, a.gift_id is not null
+    from public.audio_files a where a.id = p_id and a.created_at > now() - interval '24 hours';
+$$;
+
+create or replace function public.commit_audio(p_id uuid, p_bytes int)
+returns boolean
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+begin
+  update public.audio_files set committed = true, bytes = p_bytes where id = p_id and gift_id is null and committed = false;
+  return found;
+end $$;
+
+-- Remove an upload that failed verification; returns its storage path (null if there was none).
+create or replace function public.discard_audio(p_id uuid)
+returns text
+language sql
+security definer
+set search_path = public, pg_temp
+as $$
+  delete from public.audio_files where id = p_id and gift_id is null returning storage_path;
+$$;
+
+-- ---------------------------------------------------------------------------
 -- Create a gift (single transaction).
 --   status 'ok'         -> created, code returned
 --   status 'replay'     -> same idempotency key + same manage key: the earlier gift is returned
@@ -116,6 +177,8 @@ $$;
 --   status 'idem_conflict' -> idempotency key used with a different manage key (rejected)
 --   status 'bad_photo'  -> a referenced photo id is unknown, already attached, or older than 24 h
 --   status 'photo_limit'-> more than 5 photos
+--   status 'bad_audio'  -> an uploaded song is unknown, unverified, already attached, or older than 24 h
+--   status 'audio_too_big' -> uploaded songs add up to more than 30 MB
 -- ---------------------------------------------------------------------------
 create or replace function public.create_gift(
   p_code text, p_message text, p_songs jsonb, p_photos jsonb,
@@ -129,6 +192,8 @@ declare
   g_id uuid;
   existing record;
   stored_ids uuid[];
+  audio_ids uuid[];
+  audio_total bigint;
   found_count int;
   pos int := 0;
   item jsonb;
@@ -158,6 +223,20 @@ begin
     end if;
   end if;
 
+  select coalesce(array_agg((e->>'id')::uuid), '{}') into audio_ids
+    from jsonb_array_elements(p_songs) e where e->>'id' is not null;
+
+  if array_length(audio_ids, 1) is not null then
+    select count(*), coalesce(sum(a.bytes), 0) into found_count, audio_total from public.audio_files a
+      where a.id = any(audio_ids) and a.gift_id is null and a.committed and a.created_at > now() - interval '24 hours';
+    if found_count <> array_length(audio_ids, 1) then
+      return query select 'bad_audio'::text, null::text; return;
+    end if;
+    if audio_total > 30000000 then
+      return query select 'audio_too_big'::text, null::text; return;
+    end if;
+  end if;
+
   begin
     insert into public.gifts (code, message, songs, photos, manage_key_hash, idempotency_hash)
     values (p_code, p_message, p_songs, p_photos, p_manage_hash, p_idem_hash)
@@ -179,6 +258,9 @@ begin
   if array_length(stored_ids, 1) is not null then
     update public.photos set gift_id = g_id where id = any(stored_ids) and gift_id is null;
   end if;
+  if array_length(audio_ids, 1) is not null then
+    update public.audio_files set gift_id = g_id where id = any(audio_ids) and gift_id is null;
+  end if;
   return query select 'ok'::text, p_code;
 end $$;
 
@@ -195,6 +277,7 @@ as $$
 declare
   g record;
   resolved jsonb;
+  resolved_songs jsonb;
 begin
   select * into g from public.gifts where code = p_code;
   if not found then
@@ -213,16 +296,26 @@ begin
     into resolved
     from jsonb_array_elements(g.photos) with ordinality as e(value, ord);
 
-  return query select 'ok'::text, g.message, g.songs, resolved;
+  select coalesce(jsonb_agg(
+           case when e.value->>'id' is not null
+                then jsonb_build_object('title', e.value->'title', 'artist', e.value->'artist', 'type','stored', 'id', e.value->>'id',
+                                        'path', (select a.storage_path from public.audio_files a where a.id = (e.value->>'id')::uuid))
+                else e.value end
+           order by e.ord), '[]'::jsonb)
+    into resolved_songs
+    from jsonb_array_elements(g.songs) with ordinality as e(value, ord);
+
+  return query select 'ok'::text, g.message, resolved_songs, resolved;
 end $$;
 
 -- ---------------------------------------------------------------------------
 -- Delete a gift (requires the manage-key hash). Wipes the content, keeps a tombstone so the
--- link answers "deleted" rather than "never existed". Returns the storage paths to remove.
+-- link answers "deleted" rather than "never existed". Returns the storage paths (photos, audio) to remove.
 --   status: 'ok' | 'not_found' | 'forbidden' | 'gone'
 -- ---------------------------------------------------------------------------
-create or replace function public.delete_gift(p_code text, p_manage_hash text)
-returns table (status text, paths text[])
+drop function if exists public.delete_gift(text, text);
+create function public.delete_gift(p_code text, p_manage_hash text)
+returns table (status text, paths text[], audio_paths text[])
 language plpgsql
 security definer
 set search_path = public, pg_temp
@@ -230,42 +323,50 @@ as $$
 declare
   g record;
   del_paths text[];
+  del_audio text[];
 begin
   select * into g from public.gifts where code = p_code for update;
   if not found then
-    return query select 'not_found'::text, null::text[]; return;
+    return query select 'not_found'::text, null::text[], null::text[]; return;
   end if;
   if g.manage_key_hash is null or g.manage_key_hash <> p_manage_hash then
-    return query select 'forbidden'::text, null::text[]; return;
+    return query select 'forbidden'::text, null::text[], null::text[]; return;
   end if;
   if g.deleted_at is not null then
-    return query select 'gone'::text, null::text[]; return;
+    return query select 'gone'::text, null::text[], null::text[]; return;
   end if;
 
-  select coalesce(array_agg(storage_path), '{}') into del_paths from public.photos where gift_id = g.id;
+  select coalesce(array_agg(p.storage_path), '{}') into del_paths from public.photos p where p.gift_id = g.id;
+  select coalesce(array_agg(a.storage_path), '{}') into del_audio from public.audio_files a where a.gift_id = g.id;
   delete from public.photos where gift_id = g.id;
+  delete from public.audio_files where gift_id = g.id;
   update public.gifts set message = '', songs = '[]'::jsonb, photos = '[]'::jsonb, deleted_at = now() where id = g.id;
-  return query select 'ok'::text, del_paths;
+  return query select 'ok'::text, del_paths, del_audio;
 end $$;
 
 -- ---------------------------------------------------------------------------
 -- Housekeeping (called daily by the scheduled function): unattached uploads older than 24 h,
 -- and old rate-limit rows. Returns the storage paths the caller must delete from the bucket.
 -- ---------------------------------------------------------------------------
-create or replace function public.purge_orphans()
-returns table (paths text[])
+drop function if exists public.purge_orphans();
+create function public.purge_orphans()
+returns table (paths text[], audio_paths text[])
 language plpgsql
 security definer
 set search_path = public, pg_temp
 as $$
 declare
   p text[];
+  ap text[];
 begin
   with gone as (
     delete from public.photos where gift_id is null and created_at < now() - interval '24 hours' returning storage_path
   ) select coalesce(array_agg(storage_path), '{}') into p from gone;
+  with gone as (
+    delete from public.audio_files where gift_id is null and created_at < now() - interval '24 hours' returning storage_path
+  ) select coalesce(array_agg(storage_path), '{}') into ap from gone;
   delete from public.rate_limits where window_start < now() - interval '2 days';
-  return query select p;
+  return query select p, ap;
 end $$;
 
 -- ---------------------------------------------------------------------------
@@ -277,6 +378,10 @@ revoke all on function public.create_gift(text,text,jsonb,jsonb,text,text)      
 revoke all on function public.get_gift(text)                                      from public;
 revoke all on function public.delete_gift(text,text)                              from public;
 revoke all on function public.purge_orphans()                                     from public;
+revoke all on function public.register_audio(uuid,text,text,int,boolean)          from public;
+revoke all on function public.audio_info(uuid)                                    from public;
+revoke all on function public.commit_audio(uuid,int)                              from public;
+revoke all on function public.discard_audio(uuid)                                 from public;
 
 do $$
 begin
@@ -287,12 +392,16 @@ begin
     execute 'grant execute on function public.get_gift(text)                               to service_role';
     execute 'grant execute on function public.delete_gift(text,text)                       to service_role';
     execute 'grant execute on function public.purge_orphans()                              to service_role';
-    execute 'grant all on public.gifts, public.photos, public.rate_limits to service_role';
+    execute 'grant execute on function public.register_audio(uuid,text,text,int,boolean)   to service_role';
+    execute 'grant execute on function public.audio_info(uuid)                             to service_role';
+    execute 'grant execute on function public.commit_audio(uuid,int)                       to service_role';
+    execute 'grant execute on function public.discard_audio(uuid)                          to service_role';
+    execute 'grant all on public.gifts, public.photos, public.rate_limits, public.audio_files to service_role';
   end if;
 end $$;
 
 -- ---------------------------------------------------------------------------
--- Storage: private bucket for photos. No storage.objects policies are created, so only the
+-- Storage: private buckets for photos (gift-photos) and uploaded songs (gift-audio). No storage.objects policies are created, so only the
 -- service role (which bypasses RLS) can read or write objects; browsers use signed URLs.
 -- (On a plain Postgres without the Supabase `storage` schema this block is skipped.)
 -- ---------------------------------------------------------------------------
@@ -303,5 +412,11 @@ begin
     values ('gift-photos', 'gift-photos', false, 1500000, array['image/jpeg','image/png','image/webp'])
     on conflict (id) do update set public = false, file_size_limit = 1500000,
       allowed_mime_types = array['image/jpeg','image/png','image/webp'];
+    -- songs uploaded from the creator's device (private; played through signed URLs). 10 MB per file.
+    insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+    values ('gift-audio', 'gift-audio', false, 10000000,
+            array['audio/mpeg','audio/mp4','audio/aac','audio/ogg','audio/wav','audio/webm'])
+    on conflict (id) do update set public = false, file_size_limit = 10000000,
+      allowed_mime_types = array['audio/mpeg','audio/mp4','audio/aac','audio/ogg','audio/wav','audio/webm'];
   end if;
 end $$;

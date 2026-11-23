@@ -44,11 +44,12 @@ export async function startDevServer({ port = Number(process.env.PORT || 8888), 
   }
   const fnGifts = (await import(pathToFileURL(path.join(ROOT, 'netlify/functions/gifts.mjs')))).default;
   const fnPhotos = (await import(pathToFileURL(path.join(ROOT, 'netlify/functions/photos.mjs')))).default;
+  const fnAudio = (await import(pathToFileURL(path.join(ROOT, 'netlify/functions/audio.mjs')))).default;
 
   const headersFor = (p) => {
     const h = {}; for (const r of cfg.headers) if (globToRe(r.for).test(p)) Object.assign(h, r.values);
     // test stand-in storage lives on another localhost origin: let the CSP allow its images
-    if (fakeSb && h['Content-Security-Policy']) h['Content-Security-Policy'] = h['Content-Security-Policy'].replace('img-src', `img-src ${fakeSb.url}`);
+    if (fakeSb && h['Content-Security-Policy']) h['Content-Security-Policy'] = h['Content-Security-Policy'].replace('img-src', `img-src ${fakeSb.url}`).replace('media-src', `media-src ${fakeSb.url}`).replace('connect-src', `connect-src ${fakeSb.url}`);
     return h;
   };
   const finish = (req, res, status, body, type, p) => {
@@ -76,6 +77,7 @@ export async function startDevServer({ port = Number(process.env.PORT || 8888), 
         if (p === '/api/gifts') r = await fnGifts(request, { ip, params: {} });
         else if (m) r = await fnGifts(request, { ip, params: { code: m[1] } });
         else if (p === '/api/photos') r = await fnPhotos(request, { ip, params: {} });
+        else if (/^\/api\/audio(\/(sign|commit))?\/?$/.test(p)) r = await fnAudio(request, { ip, params: {} });
         else r = new Response('{"error":"not_found"}', { status: 404, headers: { 'Content-Type': 'application/json' } });
         const out = Buffer.from(await r.arrayBuffer()); const h = { ...headersFor(p) };
         r.headers.forEach((v, k) => { h[k] = v; }); h['Content-Length'] = out.length;

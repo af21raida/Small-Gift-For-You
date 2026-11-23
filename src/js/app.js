@@ -17,6 +17,10 @@ const PHOTO_QUALITY = 0.8;
 const PHOTO_MAX_BYTES = 1500000;      // matches the server limit
 const PHOTO_MAX_INPUT_BYTES = 30 * 1024 * 1024;
 const PHOTO_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
+const AUDIO_MAX_BYTES = 10 * 1000 * 1000;    // per uploaded song (matches the server and the storage bucket)
+const AUDIO_PROXY_MAX = 4 * 1000 * 1000;     // up to here a song goes through the site's function; bigger ones upload directly to storage
+const AUDIO_TOTAL_MAX = 30 * 1000 * 1000;    // all uploaded songs in one gift
+const AUDIO_ACCEPT = 'audio/mpeg,audio/mp4,audio/aac,audio/ogg,audio/wav,audio/webm,.mp3,.m4a,.aac,.ogg,.oga,.opus,.wav,.webm';
 const CODE_LEN = 20;
 const CODE_ALPHABET = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
 const LETTER_ART_W = 421;             // native width of letter-page.png
@@ -244,8 +248,11 @@ function friendly(err, what){
     case 'gone': return 'This gift has been deleted or has expired.';
     case 'backend_not_configured': return 'The gift service isn’t set up yet. (The site owner still needs to finish the Supabase configuration.)';
     case 'invalid': case 'invalid_input': return err.message || 'Some of the details weren’t accepted. Please check them and try again.';
-    case 'payload_too_large': return 'That file is too large.';
-    case 'unsupported_type': return 'That file type isn’t supported. Use a JPEG, PNG or WebP photo.';
+    case 'payload_too_large': return what === 'song' ? 'That song file is too large (10 MB maximum).' : 'That file is too large.';
+    case 'unsupported_type': return what === 'song' ? 'That file isn’t a supported song. Use MP3, M4A, AAC, OGG, WAV or WebM.' : 'That file type isn’t supported. Use a JPEG, PNG or WebP photo.';
+    case 'audio_too_big': return 'Uploaded songs can total up to 30 MB per gift. Remove one or choose a smaller file.';
+    case 'upload_missing': return 'The song didn’t finish uploading. Please try again.';
+    case 'aborted': return 'The upload was cancelled.';
     case 'photo_limit': return 'You can add up to '+MAX_PHOTOS+' photos.';
     case 'quota_exceeded': return 'Storage is full right now. Please try again later.';
     default: return err.status >= 500 ? 'The server had a problem. Please try again in a moment.' : (err.message || 'Something went wrong. Please try again.');
@@ -267,6 +274,7 @@ let state = {
 };
 let renderedView = null;
 let photoSeq = 0;
+let songSeq = 0;
 
 /* =====================================================================
    Cursor-following cluster (home screen, fine pointers only)
@@ -292,14 +300,17 @@ function buildCluster(){
   document.body.appendChild(clusterEl);
   ccImgs = Array.from(clusterEl.querySelectorAll('img.cc'));
 }
-function ccActive(){ return state.view==='home' && !document.hidden && ccSeen && !ccHoverBtn; }
+/** Pages where the six-picture cursor cluster follows the pointer: home, the receiver's opened letter, and the record / song page. */
+function ccView(){ return state.view==='home' || (state.mode==='recipient' && (state.view==='vinyl' || state.view==='letter')); }
+const CC_HOVER_SEL = '.btn, .icon-btn, button, input, textarea, label, select, .track, .progress-wrap, a, [role=button]';
+function ccActive(){ return ccView() && !document.hidden && ccSeen && !ccHoverBtn; }
 function ccStep(){
   ccRaf = 0;
   if(!clusterEl) return;
-  if(state.view!=='home') ccHoverBtn = false;
+  if(!ccView()) ccHoverBtn = false;
   const show = ccActive();
   clusterEl.classList.toggle('on', show);
-  if(state.view!=='home' || document.hidden || !ccSeen) return;     // sleep: restarted by the next mousemove
+  if(!ccView() || document.hidden || !ccSeen) return;     // sleep: restarted by the next mousemove
   let tx = ccTX, ty = ccTY, px = 0, py = 0, moving = false;
   for(let k=0;k<ccChain.length;k++){
     const i = ccChain[k];
@@ -328,10 +339,13 @@ if(ccFine){
   }, {passive:true});
   document.documentElement.addEventListener('mouseleave', ()=>{ ccSeen = false; ccKick(); });
   document.addEventListener('mouseover', e=>{
-    if(state.view==='home' && e.target && e.target.closest && e.target.closest('.home-card .btn')){ ccHoverBtn = true; ccKick(); }
+    if(ccView() && e.target && e.target.closest && e.target.closest(state.view==='home' ? '.home-card .btn' : CC_HOVER_SEL)){ ccHoverBtn = true; ccKick(); }
   });
   document.addEventListener('mouseout', e=>{
-    if(e.target && e.target.closest && e.target.closest('.home-card .btn')){ ccHoverBtn = false; ccKick(); }
+    if(e.target && e.target.closest && e.target.closest(state.view==='home' ? '.home-card .btn' : CC_HOVER_SEL)){
+      const to = e.relatedTarget;
+      if(!(to && to.closest && to.closest(state.view==='home' ? '.home-card .btn' : CC_HOVER_SEL))){ ccHoverBtn = false; ccKick(); }
+    }
   });
   document.addEventListener('visibilitychange', ccKick);
   if(reduceMotion && reduceMotion.addEventListener) reduceMotion.addEventListener('change', ()=>{ if(reduceMotion.matches && clusterEl) clusterEl.classList.remove('on'); });
@@ -359,7 +373,7 @@ function saveDraftNow(){
   const L = state.letter;
   store.set(DRAFT_KEY, JSON.stringify({
     message: L.message,
-    songs: L.songs,
+    songs: L.songs.filter(s=>!s.up),             // songs uploaded from a device can't be restored after a reload
     photos: L.photos.filter(p=>p.ext).map(p=>({url:p.url})),
     savedAt: Date.now()
   }));
@@ -374,15 +388,15 @@ function loadDraft(){
 window.addEventListener('pagehide', saveDraftNow);
 window.addEventListener('beforeunload', e=>{
   saveDraftNow();
-  if(state.mode==='creator' && state.view!=='saved' && state.letter.photos.some(p=>!p.ext)){
-    e.preventDefault(); e.returnValue = '';   // uploaded (not external) photos can't be restored from the draft
+  if(state.mode==='creator' && state.view!=='saved' && (state.letter.photos.some(p=>!p.ext) || state.letter.songs.some(s=>s.up))){
+    e.preventDefault(); e.returnValue = '';   // uploaded photos/songs can't be restored from the draft
   }
 });
 
 /* =====================================================================
    Gift: save / load / delete
    ===================================================================== */
-function serializeSong(s){ return {title:s.title, artist:s.artist || '', url:s.url}; }
+function serializeSong(s){ return s.up ? {title:s.title, artist:s.artist || '', id:s.id} : {title:s.title, artist:s.artist || '', url:s.url}; }
 
 function validateBeforeSave(){
   const L = state.letter;
@@ -391,6 +405,8 @@ function validateBeforeSave(){
   if(L.message.length > MAX_MESSAGE) return 'Your letter is a little too long (limit '+MAX_MESSAGE.toLocaleString()+' characters).';
   if(L.photos.some(p=>p.status==='uploading' || p.status==='processing')) return 'Please wait until your photos have finished uploading.';
   if(L.photos.some(p=>p.status==='error')) return 'One of your photos didn’t upload. Retry it or remove it, then save.';
+  if(L.songs.some(x=>x.up && x.status==='uploading')) return 'Please wait until your songs have finished uploading.';
+  if(L.songs.some(x=>x.up && x.status==='error')) return 'One of your songs didn’t upload. Retry it or remove it, then save.';
   return '';
 }
 
@@ -471,8 +487,9 @@ async function loadLetter(raw){
 function applyGift(g, code){
   const photos = Array.isArray(g.photos) ? g.photos.filter(p=>p && okRemote(p.url)).map(p=>({url:p.url, ext:!!p.external})) : [];
   let songs = Array.isArray(g.songs) ? g.songs.map(s=>({
-      title:String(s.title||'').slice(0,120), artist:String(s.artist||'').slice(0,120), url:normalizeSongUrl(String(s.url||''))
-    })).filter(s=> s.title && (/^builtin:song-[1-3]$/.test(s.url) || /^https:\/\//.test(s.url))) : [];
+      title:String(s.title||'').slice(0,120), artist:String(s.artist||'').slice(0,120), url:normalizeSongUrl(String(s.url||'')),
+      stored:!!s.stored, sid:typeof s.id==='string' ? s.id : ''
+    })).filter(s=> s.title && (/^builtin:song-[1-3]$/.test(s.url) || okRemote(s.url))) : [];
   if(!songs.length) songs = cloneDefaults();
   state.letter = { message: String(g.message || ''), songs, photos };
   state.code = code;
@@ -643,6 +660,7 @@ function removePhoto(i){
    ===================================================================== */
 let animateNext = false;
 function render(){
+  ccHoverBtn = false; ccKick();   // the element under the pointer is replaced on every render
   const changed = state.view !== renderedView;
   const y = window.scrollY;
   animateNext = changed;
@@ -771,16 +789,10 @@ function renderEnvelope(){
   wrap.addEventListener('click', trigger);
   wrap.addEventListener('keydown', e=>{ if(e.key==='Enter' || e.key===' '){ e.preventDefault(); trigger(); } });
 
+  // No caption under the envelope: the buttons say what to do (the envelope itself is still clickable).
   const hint = el('div',{class:'env-hint'+(isOpen?' clickable':''),'aria-live':'polite'});
-  if(!isOpen){
-    hint.textContent = state.mode==='creator' ? 'Click to begin your letter' : 'Click to open your gift';
-  } else {
-    hint.textContent = state.mode==='creator' ? 'Click to begin your letter' : 'Click to read your letter';
-    hint.setAttribute('role','button');
-    hint.setAttribute('tabindex','0');
-    hint.setAttribute('aria-label', hint.textContent);
+  if(isOpen){
     hint.addEventListener('click', goLetter);
-    hint.addEventListener('keydown', e=>{ if(e.key==='Enter' || e.key===' '){ e.preventDefault(); goLetter(); } });
   }
 
   // Six decorative pictures — closed envelope only (hidden once opened)
@@ -844,7 +856,7 @@ function renderPostcard(){
     if(atMax) fileInput.setAttribute('disabled','');
     const msg = el('div',{class:'error',role:'alert',id:'photo-msg',style:state.photoMsg?'':'display:none',text:state.photoMsg});
     return el('div',{class:'postcard-section',id:'postcard'},[
-      el('h3',{text:'Postcard photo (optional)', style:'margin:0 0 4px 0;font-size:15px;color:#606c38;'}),
+      el('h3',{text:'Postcard photo (optional)', style:'margin:0 0 4px 0;font-size:15px;'}),
       el('div',{class:'hint',style:'margin-bottom:12px;',text: photos.length+' / '+MAX_PHOTOS+' photos'}),
       photos.length ? thumbs : null,
       el('div',{class:'photo-add-row'},[fileLabel, fileInput, urlInput, addUrlBtn]),
@@ -1033,17 +1045,49 @@ function getAudio(){
       syncPlayer();
     });
     audioEl.addEventListener('error', ()=>{
-      const c = audioEl.error ? audioEl.error.code : 0;
-      state.loadError = c === 2 ? 'The network dropped while loading this song. Press play to try again.'
-        : c === 4 ? 'This song can’t be played — the link may be expired, blocked, or not a direct audio file.'
-        : 'This song couldn’t be loaded.';
-      state.isPlaying=false;
-      state.buffering=false;
-      stopNoteEmitter();
-      syncPlayer();
+      const cur = state.letter.songs[state.playingIndex];
+      if(cur && cur.stored && state.mode === 'recipient'){
+        // songs uploaded by the creator are played through time-limited links: fetch fresh ones and carry on
+        recoverStoredSong().then(ok=>{ if(!ok) showAudioError(); });
+        return;
+      }
+      showAudioError();
     });
   }
   return audioEl;
+}
+function showAudioError(){
+  const c = audioEl && audioEl.error ? audioEl.error.code : 0;
+  state.loadError = c === 2 ? 'The network dropped while loading this song. Press play to try again.'
+    : c === 4 ? 'This song can’t be played — the link may be expired, blocked, or not a direct audio file.'
+    : 'This song couldn’t be loaded.';
+  state.isPlaying=false;
+  state.buffering=false;
+  stopNoteEmitter();
+  syncPlayer();
+}
+let lastSongRefresh = 0, refreshingSongs = false;
+async function refreshStoredSongs(){
+  if(state.mode !== 'recipient' || !state.code || refreshingSongs || Date.now() - lastSongRefresh < 20000) return false;
+  refreshingSongs = true; lastSongRefresh = Date.now();
+  try{
+    const g = await api('/gifts/' + state.code, {timeout:15000});
+    const fresh = new Map((g.songs||[]).filter(x=>x && x.stored && x.id && okRemote(x.url)).map(x=>[x.id, x.url]));
+    let any = false;
+    state.letter.songs.forEach(x=>{ if(x.stored && fresh.has(x.sid)){ x.url = fresh.get(x.sid); any = true; } });
+    return any;
+  }catch(e){ return false; }
+  finally{ refreshingSongs = false; }
+}
+async function recoverStoredSong(){
+  const idx = state.playingIndex, t = audioEl ? (audioEl.currentTime || 0) : 0;
+  state.buffering = true; syncPlayer();
+  const ok = await refreshStoredSongs();
+  if(!ok) return false;
+  const a = setTrack(idx);
+  if(t > 1) a.addEventListener('loadedmetadata', function h(){ a.removeEventListener('loadedmetadata', h); try{ a.currentTime = t; }catch(e){} });
+  const pr = a.play(); if(pr && pr.catch) pr.catch(playPromiseFailed);
+  return true;
 }
 function stopAudio(){
   if(audioEl && audioEl.getAttribute('src')){
@@ -1062,7 +1106,7 @@ function sameSrc(a, url){
   try{ return a.src && new URL(url, location.href).href === a.src; }catch(e){ return false; }
 }
 function isUsableAudioUrl(url){
-  return /^\/assets\/|^\/audio\//.test(url) || /^https:\/\//.test(url);
+  return /^\/assets\/|^\/audio\//.test(url) || /^https:\/\//.test(url) || /^blob:/.test(url) || okRemote(url);
 }
 
 function startNoteEmitter(){
@@ -1196,6 +1240,8 @@ function syncPlayer(){
   if(arm) arm.className = 'tonearm' + (state.isPlaying ? ' playing' : '');
   const tt = document.querySelector('.turntable');
   if(tt) tt.classList.toggle('playing', state.isPlaying);
+  const stage = document.querySelector('.player-stage');
+  if(stage) stage.classList.toggle('is-playing', spinning);     // minstrel + angel move only while the record turns
   const play = document.getElementById('play-btn');
   if(play){
     play.textContent = state.isPlaying ? '⏸' : '▶';
@@ -1234,12 +1280,12 @@ function syncVinylForm(){
   const save = document.getElementById('save-btn');
   if(save){
     const songs = state.letter.songs.length;
-    const busyPhotos = state.letter.photos.some(p=>p.status==='uploading'||p.status==='processing');
+    const busyPhotos = state.letter.photos.some(p=>p.status==='uploading'||p.status==='processing') || state.letter.songs.some(x=>x.up && x.status==='uploading');
     save.disabled = state.saving || songs < MIN_SONGS || busyPhotos;
     save.setAttribute('aria-busy', String(state.saving));
     save.textContent = '';
     if(state.saving) save.appendChild(spinnerBtnText('Sealing your gift…'));
-    else save.appendChild(document.createTextNode(busyPhotos ? 'Waiting for photos…' : 'Save gift and get a share link'));
+    else save.appendChild(document.createTextNode(busyPhotos ? 'Waiting for uploads…' : 'Save gift and get a share link'));
   }
   const hint = document.getElementById('save-hint');
   if(hint) hint.textContent = state.letter.songs.length < MIN_SONGS ? 'Add at least one song to save your gift.' : '';
@@ -1281,7 +1327,7 @@ function renderVinyl(){
   const playerCol = el('div',{style:'display:flex;flex-direction:column;align-items:center;'},[turntable, nowPlaying]);
   const minstrel = pic('minstrel',{cls:'minstrel-pic',alt:'Medieval lute player',sizes:'(max-width:560px) 54px, 130px'});
   const angel = pic('angel',{cls:'angel-pic',alt:'Angel violinist',sizes:'(max-width:560px) 52px, 120px'});
-  const playerStage = el('div',{class:'player-stage'},[playerCol, minstrel, angel]);
+  const playerStage = el('div',{class:'player-stage'+(spinning?' is-playing':'')},[playerCol, minstrel, angel]);
 
   const seek = el('input',{type:'range',id:'seek',min:'0',max:'0',step:'0.1','aria-label':'Seek'});
   seek.addEventListener('input', ()=>{
@@ -1310,31 +1356,7 @@ function renderVinyl(){
     ])
   ]);
 
-  const playlistBox = el('div',{class:'playlist'});
-  playlistBox.appendChild(el('h3',{text:'Playlist', style:'margin:0 0 12px 0;font-size:16px;color:#606c38;display:flex;align-items:center;gap:8px;'}));
-  songs.forEach((s,i)=>{
-    const track = el('div',{class:'track'+(i===state.playingIndex?' active':'')});
-    track.appendChild(el('div',{class:'num',text:toRoman(i+1)}));
-    const meta = el('div',{class:'meta',role:'button',tabindex:'0','aria-label':'Play '+s.title});
-    const titleRow = el('div',{class:'t',text:s.title});
-    if(i===state.playingIndex && state.isPlaying){
-      titleRow.appendChild(el('span',{class:'sound-bars','aria-hidden':'true'},[
-        el('span',{class:'sound-bar'}), el('span',{class:'sound-bar'}), el('span',{class:'sound-bar'})
-      ]));
-    }
-    meta.appendChild(titleRow);
-    if(s.artist) meta.appendChild(el('div',{class:'a',text:s.artist}));
-    meta.style.cursor='pointer';
-    meta.addEventListener('click', ()=>loadTrack(i,true));
-    meta.addEventListener('keydown', e=>{ if(e.key==='Enter' || e.key===' '){ e.preventDefault(); loadTrack(i,true); } });
-    track.appendChild(meta);
-    if(state.mode==='creator'){
-      track.appendChild(el('button',{onclick:()=>moveSong(i,-1),text:'↑','aria-label':'Move up'}));
-      track.appendChild(el('button',{onclick:()=>moveSong(i,1),text:'↓','aria-label':'Move down'}));
-      track.appendChild(el('button',{onclick:()=>removeSong(i),text:'✕','aria-label':'Remove song'}));
-    }
-    playlistBox.appendChild(track);
-  });
+  const playlistBox = buildPlaylistBox();
 
   const children = [
     el('div',{class:'top-bar'},[
@@ -1352,21 +1374,35 @@ function renderVinyl(){
     t.value = state.draft.title; a.value = state.draft.artist; u.value = state.draft.url;
     [[t,'title'],[a,'artist'],[u,'url']].forEach(([inp,k])=> inp.addEventListener('input', ()=>{ state.draft[k] = inp.value; }));
     const atMax = songs.length >= MAX_SONGS;
+    const fileInput = el('input',{type:'file',id:'song-file',accept:AUDIO_ACCEPT});
+    fileInput.multiple = true;
+    fileInput.addEventListener('change', e=>{
+      const files = Array.from(e.target.files || []);
+      e.target.value = '';
+      (async()=>{ for(const f of files) await addSongFile(f, files.length === 1); })();
+    });
+    if(atMax) fileInput.setAttribute('disabled','');
+    const fileLabel = el('label',{for:'song-file',class:'btn'+(atMax?' btn-disabled':''),text: atMax ? 'Playlist full' : '♪  Add a song from this device'});
     const addBox = el('div',{class:'add-song'},[
       el('div',{style:'display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px;'},[
         el('div',{},[el('label',{text:'Title'}), t]),
         el('div',{},[el('label',{text:'Artist'}), a])
       ]),
+      el('div',{class:'file-pick'},[fileInput, fileLabel]),
+      el('div',{class:'hint',style:'margin-top:8px;font-size:12px;',text:'MP3, M4A, AAC, OGG, WAV or WebM · up to 10 MB each (30 MB in total). MP3 and M4A play on every device. Title and artist are optional — we use the file name. Only add music you own or are allowed to share.'}),
+      el('div',{class:'or-divider','aria-hidden':'true'},[el('span',{text:'or use a link'})]),
       el('label',{text:'Audio URL'}), u,
       el('div',{class:'hint',style:'margin-top:8px;font-size:12px;',text:'Use a direct link to an audio file. Streaming pages (YouTube, Spotify, …) can’t be played here.'}),
-      el('div',{style:'margin-top:14px;text-align:right;'},[el('button',{class:'btn ghost',disabled:atMax,onclick:addSong,text: atMax ? 'Playlist full' : '+ Add song'})])
+      el('div',{style:'margin-top:14px;text-align:right;'},[el('button',{class:'btn ghost',disabled:atMax,onclick:addSong,text: atMax ? 'Playlist full' : '+ Add song from link'})])
     ]);
     children.push(addBox);
     children.push(el('div',{id:'save-hint',class:'hint',style:'margin-top:16px;','aria-live':'polite'}));
     children.push(el('button',{class:'btn',id:'save-btn',style:'margin-top:8px;',onclick:saveLetter,text:'Save gift and get a share link'}));
     children.push(el('button',{class:'btn ghost',style:'margin-top:12px;',onclick:()=>{state.view='letter';render();},text:'Back to letter'}));
+    children.push(el('button',{class:'btn ghost',id:'home-btn',style:'margin-top:12px;',onclick:()=>{state.view='home';state.mode=null;state.loadError='';render();},text:'Home'}));
   } else {
     children.push(el('p',{class:'hint',style:'margin-top:20px;font-style:italic;',text:'This is a personal gift someone made for you.'}));
+    children.push(el('button',{class:'btn',id:'home-btn',style:'margin-top:22px;',onclick:()=>{ stopAudio(); state.view='home'; state.mode=null; state.loadError=''; try{ if(location.pathname!=='/') history.replaceState(null,'','/'); }catch(_){} render(); },text:'Home'}));
   }
 
   screen(children, 'vinyl-section');
@@ -1375,6 +1411,169 @@ function renderVinyl(){
   updateProgressUI();
   syncVinylForm();
   if(state.isPlaying) startNoteEmitter();
+}
+
+
+/** The playlist. Built by a function so upload progress can refresh just the list without re-rendering the form. */
+function buildPlaylistBox(){
+  const songs = state.letter.songs;
+  const playlistBox = el('div',{class:'playlist'});
+  playlistBox.appendChild(el('h3',{text:'Playlist', style:'margin:0 0 12px 0;font-size:16px;color:#606c38;display:flex;align-items:center;gap:8px;'}));
+  songs.forEach((s,i)=>{
+    const track = el('div',{class:'track'+(i===state.playingIndex?' active':''), 'data-song-key': s.up ? String(s.key) : null});
+    track.appendChild(el('div',{class:'num',text:toRoman(i+1)}));
+    const meta = el('div',{class:'meta',role:'button',tabindex:'0','aria-label':'Play '+s.title});
+    const titleRow = el('div',{class:'t',text:s.title});
+    if(i===state.playingIndex && state.isPlaying){
+      titleRow.appendChild(el('span',{class:'sound-bars','aria-hidden':'true'},[
+        el('span',{class:'sound-bar'}), el('span',{class:'sound-bar'}), el('span',{class:'sound-bar'})
+      ]));
+    }
+    meta.appendChild(titleRow);
+    if(s.up && s.status==='uploading'){
+      meta.appendChild(el('div',{class:'a up-status',role:'status'},['Uploading… ', el('span',{class:'up-pct',text:Math.round((s.progress||0)*100)+'%'})]));
+      meta.appendChild(el('div',{class:'up-bar','aria-hidden':'true'},[el('i',{style:'width:'+Math.round((s.progress||0)*100)+'%'})]));
+    }else if(s.up && s.status==='error'){
+      meta.appendChild(el('div',{class:'a up-status up-error',role:'alert'},[s.error || 'Upload failed.', ' ']));
+    }else if(s.artist){
+      meta.appendChild(el('div',{class:'a',text:s.artist}));
+    }else if(s.up){
+      meta.appendChild(el('div',{class:'a',text:'From your device · '+fmtMB(s.size)}));
+    }
+    meta.style.cursor='pointer';
+    meta.addEventListener('click', ()=>loadTrack(i,true));
+    meta.addEventListener('keydown', e=>{ if(e.key==='Enter' || e.key===' '){ e.preventDefault(); loadTrack(i,true); } });
+    track.appendChild(meta);
+    if(state.mode==='creator'){
+      if(s.up && s.status==='error') track.appendChild(el('button',{class:'up-retry',onclick:()=>uploadSongFile(s),text:'Retry','aria-label':'Retry uploading '+s.title}));
+      track.appendChild(el('button',{onclick:()=>moveSong(i,-1),text:'↑','aria-label':'Move up'}));
+      track.appendChild(el('button',{onclick:()=>moveSong(i,1),text:'↓','aria-label':'Move down'}));
+      track.appendChild(el('button',{onclick:()=>removeSong(i),text:'✕','aria-label':'Remove song'}));
+    }
+    playlistBox.appendChild(track);
+  });
+  return playlistBox;
+}
+function refreshPlaylist(){
+  if(state.view !== 'vinyl') return;
+  const old = document.querySelector('.playlist');
+  if(old) old.replaceWith(buildPlaylistBox());
+  syncVinylForm();
+}
+function fmtMB(n){ return (n/1e6).toFixed(n < 1e7 ? 1 : 0) + ' MB'; }
+
+/* =====================================================================
+   Songs from the creator's device
+   ===================================================================== */
+/** Identify the real audio format from the file's first bytes (file extensions and MIME types from pickers are unreliable). */
+async function sniffAudioFile(file){
+  try{
+    const b = new Uint8Array(await file.slice(0, 16).arrayBuffer());
+    const t = (i,n)=> String.fromCharCode.apply(null, Array.from(b.slice(i,i+n)));
+    if(t(0,3) === 'ID3') return 'audio/mpeg';
+    if(b[0] === 0xff && (b[1] & 0xe0) === 0xe0){
+      const layer = (b[1] >> 1) & 3, ver = (b[1] >> 3) & 3;
+      if(ver === 1) return null;
+      return layer === 0 ? 'audio/aac' : 'audio/mpeg';
+    }
+    if(t(4,4) === 'ftyp') return 'audio/mp4';
+    if(t(0,4) === 'OggS') return 'audio/ogg';
+    if(t(0,4) === 'RIFF' && t(8,4) === 'WAVE') return 'audio/wav';
+    if(b[0] === 0x1a && b[1] === 0x45 && b[2] === 0xdf && b[3] === 0xa3) return 'audio/webm';
+  }catch(e){}
+  return null;
+}
+function songNameFromFile(name){
+  return String(name || '').replace(/\.[^.]+$/, '').replace(/_+/g, ' ').replace(/\s+/g, ' ').trim().slice(0,120) || 'My song';
+}
+function songFileProblem(msg){ state.loadError = msg; syncVinylForm(); }
+
+async function addSongFile(file, useDraftNames){
+  if(!file) return;
+  state.loadError = '';
+  if(state.letter.songs.length >= MAX_SONGS) return songFileProblem('You can add up to '+MAX_SONGS+' songs.');
+  if(!file.size) return songFileProblem('“'+file.name+'” is empty.');
+  if(file.size > AUDIO_MAX_BYTES) return songFileProblem('“'+file.name+'” is '+fmtMB(file.size)+' — songs can be up to 10 MB. Try a smaller file (an MP3 or M4A at 128 kbps is usually 1 MB per minute).');
+  const used = state.letter.songs.filter(x=>x.up).reduce((n,x)=>n+x.size, 0);
+  if(used + file.size > AUDIO_TOTAL_MAX) return songFileProblem('Uploaded songs can total up to 30 MB per gift (you’ve used '+fmtMB(used)+'). Remove one or choose a smaller file.');
+  const mime = await sniffAudioFile(file);
+  if(!mime) return songFileProblem('“'+file.name+'” isn’t a supported audio file. Use MP3, M4A, AAC, OGG, WAV or WebM.');
+  if(!document.createElement('audio').canPlayType(mime)) return songFileProblem('This browser can’t play that kind of file. MP3 and M4A work on every device.');
+  const blob = new Blob([file], {type:mime});
+  const typedTitle = useDraftNames ? state.draft.title.trim() : '';
+  const sg = {
+    key:++songSeq, up:true, status:'uploading', progress:0, error:'', id:'',
+    title: (typedTitle || songNameFromFile(file.name)).slice(0,120),
+    artist: useDraftNames ? state.draft.artist.trim().slice(0,120) : '',
+    url: URL.createObjectURL(blob), blob, mime, size:file.size, ref:{}
+  };
+  state.letter.songs.push(sg);
+  if(useDraftNames){ state.draft.title = ''; state.draft.artist = ''; }
+  state.saveFp = '';
+  if(state.view === 'vinyl') render();
+  await uploadSongFile(sg);
+}
+
+function xhrSend(method, url, body, headers, onProgress, ref){
+  return new Promise(resolve=>{
+    const x = new XMLHttpRequest();
+    if(ref) ref.xhr = x;
+    x.open(method, url);
+    x.timeout = 5 * 60 * 1000;
+    Object.keys(headers || {}).forEach(k=> x.setRequestHeader(k, headers[k]));
+    if(x.upload && onProgress) x.upload.onprogress = e=>{ if(e.lengthComputable) onProgress(e.loaded / e.total); };
+    x.onload = ()=> resolve({status:x.status, text:x.responseText});
+    x.onerror = ()=> resolve({status:0, text:''});
+    x.ontimeout = ()=> resolve({status:-1, text:''});
+    x.onabort = ()=> resolve({status:-2, text:''});
+    x.send(body);
+  });
+}
+function xhrError(r){
+  let d = null; try{ d = JSON.parse(r.text); }catch(e){}
+  if(r.status === 0) return new ApiError('network', 0);
+  if(r.status === -1) return new ApiError('timeout', 0);
+  if(r.status === -2) return new ApiError('aborted', 0);
+  if(r.status === 413) return new ApiError('payload_too_large', 413);
+  if(r.status === 415) return new ApiError('unsupported_type', 415);
+  return new ApiError((d && d.error) || ('http_'+r.status), r.status, d && d.message);
+}
+function songProgress(sg, frac){
+  sg.progress = Math.max(0, Math.min(1, frac));
+  const row = document.querySelector('[data-song-key="'+sg.key+'"]');
+  if(!row) return;
+  const pct = Math.round(sg.progress * 100);
+  const t = row.querySelector('.up-pct'); if(t) t.textContent = pct + '%';
+  const i = row.querySelector('.up-bar i'); if(i) i.style.width = pct + '%';
+}
+
+async function uploadSongFile(sg){
+  sg.status = 'uploading'; sg.error = ''; sg.progress = 0;
+  refreshPlaylist();
+  try{
+    if(sg.size <= AUDIO_PROXY_MAX){
+      // small file: through the site's own function
+      const r = await xhrSend('POST', '/api/audio', sg.blob, {'Content-Type': sg.mime}, f=>songProgress(sg, f), sg.ref);
+      if(r.status < 200 || r.status >= 300) throw xhrError(r);
+      sg.id = JSON.parse(r.text).id;
+    }else{
+      // large file: ask for a one-time upload link, send the bytes straight to storage, then have the server verify them
+      const s1 = await api('/audio/sign', {method:'POST', json:{type:sg.mime, bytes:sg.size}, timeout:30000});
+      const fd = new FormData(); fd.append('cacheControl', '3600'); fd.append('', sg.blob);
+      const r = await xhrSend('PUT', s1.uploadUrl, fd, {}, f=>songProgress(sg, f * 0.97), sg.ref);
+      if(r.status < 200 || r.status >= 300) throw xhrError(r);
+      await api('/audio/commit', {method:'POST', json:{id:s1.id}, timeout:30000});
+      sg.id = s1.id;
+    }
+    if(!sg.id) throw new ApiError('bad_response', 502);
+    sg.status = 'ready'; sg.progress = 1;
+  }catch(e){
+    if(sg.removed) return;
+    sg.status = 'error';
+    sg.error = friendly(e, 'song');
+  }
+  state.saveFp = '';
+  refreshPlaylist();
 }
 
 function addSong(){
@@ -1397,6 +1596,12 @@ function addSong(){
   render();
 }
 function removeSong(i){
+  const gone = state.letter.songs[i];
+  if(gone && gone.up){
+    gone.removed = true;
+    if(gone.ref && gone.ref.xhr) try{ gone.ref.xhr.abort(); }catch(e){}
+    if(gone.url && gone.url.startsWith('blob:')) try{ URL.revokeObjectURL(gone.url); }catch(e){}
+  }
   state.letter.songs.splice(i,1);
   if(i < state.playingIndex) state.playingIndex--;
   if(state.playingIndex>=state.letter.songs.length) state.playingIndex=0;

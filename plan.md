@@ -523,3 +523,6 @@ Date: 2026-09-10
    - Connected the seek bar to actual audio `currentTime` and `duration`, supporting smooth user scrubbing without glitching during playback.
    - Connected volume slider to `audioEl.volume` for immediate, real-time volume adjustment.
 
+
+## Songs from device (2026-11-21)
+Done: schema + API + UI + tests. Remaining: re-run schema.sql in Supabase, verify >4 MB direct upload on real Supabase.

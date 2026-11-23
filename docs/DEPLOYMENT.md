@@ -82,3 +82,14 @@ lookups per 10 min.
   code in the same browser offers to re-publish it.
 * The licensed Celandine font is not bundled; the Georgia/serif fallback is used. Drop licensed `celandine-regular.woff2` and
   `celandine-bold.woff2` into `src/fonts/` and rebuild to enable it.
+
+
+## Update: songs from the creator's device, medieval photo tray, animated figures
+
+**You must do this once for song uploads to work in production**
+1. Supabase → SQL Editor → paste the whole updated `supabase/schema.sql` → Run. It is safe to re-run; it adds the `audio_files` table, new functions and the private `gift-audio` bucket. Check Storage shows `gift-audio`.
+2. Push the updated project to GitHub `main` (Netlify redeploys by itself).
+
+Limits: 10 MB per song, 30 MB of uploaded songs per gift, MP3/M4A/AAC/OGG/WAV/WebM (checked by content, not by name). Supabase free plan: 50 MB per file and 1 GB storage in total.
+Songs up to 4 MB go through the Netlify function; larger ones upload straight to Supabase Storage with a one-time link and are verified afterwards.
+**Not yet verified against real Supabase:** the direct (>4 MB) path. After deploying, test once with an ~8 MB MP3; if it fails with a network error, the Supabase Storage CORS/limits are the first place to look.

@@ -3,12 +3,14 @@ import test, { before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import gifts from '../../netlify/functions/gifts.mjs';
 import photos from '../../netlify/functions/photos.mjs';
+import audio from '../../netlify/functions/audio.mjs';
 import { cleanup } from '../../netlify/lib/handlers.mjs';
 import { startFakeSupabase } from '../support/fake-supabase.mjs';
 
 let fake; let ipN = 0;
 const JPEG = (n = 2000) => Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(n, 7)]);
 const PNG = () => Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(500, 1)]);
+const MP3 = (n = 3000) => Buffer.concat([Buffer.from('ID3\x03\x00\x00\x00\x00\x00\x00'), Buffer.alloc(n, 9)]);
 const newIp = () => `203.0.113.${++ipN}`;
 const token = (n = 43) => Buffer.from(Array.from({ length: n }, () => Math.floor(Math.random() * 256))).toString('base64url').slice(0, n);
 const songs = (n = 1) => Array.from({ length: n }, (_, i) => ({ title: 'Song ' + i, artist: 'X', url: 'builtin:song-1' }));
@@ -218,4 +220,173 @@ test('upstream outage surfaces as a 5xx error, never as success', async () => {
   const saved = process.env.SUPABASE_URL; process.env.SUPABASE_URL = 'http://127.0.0.1:1';
   try { const r = await create(); assert.ok(r.status >= 500, 'status ' + r.status); assert.ok(!r.data.code); }
   finally { process.env.SUPABASE_URL = saved; }
+});
+
+/* ------------------------------------------------------------------ songs uploaded from the creator's device */
+const upAudio = (buf, type = 'audio/mpeg', ip) => call(audio, 'POST', '/api/audio', { raw: buf, headers: { 'content-type': type }, ip });
+const signAudio = (type, bytes, ip) => call(audio, 'POST', '/api/audio/sign', { body: { type, bytes }, ip });
+const commitAudio = (id, ip) => call(audio, 'POST', '/api/audio/commit', { body: { id }, ip });
+/** Do what the browser does: multipart PUT of the file to the one-time signed URL (same shape supabase-js uses). */
+async function directPut(uploadUrl, bytes, type) {
+  const fd = new FormData(); fd.append('cacheControl', '3600'); fd.append('', new Blob([bytes], { type }));
+  return fetch(uploadUrl, { method: 'PUT', body: fd });
+}
+async function directUpload(bytes, type = 'audio/mpeg', ip = newIp()) {
+  const s = await signAudio(type, bytes.length, ip); assert.equal(s.status, 201, JSON.stringify(s.data));
+  const put = await directPut(s.data.uploadUrl, bytes, type); assert.equal(put.status, 200);
+  const c = await commitAudio(s.data.id, ip); assert.equal(c.status, 200, JSON.stringify(c.data));
+  return s.data.id;
+}
+const song = (id, title = 'Mine') => ({ title, artist: 'Me', id });
+
+test('audio (small file) via the function: accepted for every supported format, stored privately', async () => {
+  const samples = [['audio/mpeg', MP3()], ['audio/ogg', Buffer.concat([Buffer.from('OggS'), Buffer.alloc(200)])],
+    ['audio/wav', Buffer.concat([Buffer.from('RIFF'), Buffer.alloc(4), Buffer.from('WAVEfmt '), Buffer.alloc(100)])],
+    ['audio/mp4', Buffer.concat([Buffer.from([0, 0, 0, 0x20]), Buffer.from('ftypM4A '), Buffer.alloc(100)])],
+    ['audio/aac', Buffer.concat([Buffer.from([0xff, 0xf1, 0x50, 0x80]), Buffer.alloc(100)])],
+    ['audio/webm', Buffer.concat([Buffer.from([0x1a, 0x45, 0xdf, 0xa3]), Buffer.alloc(100)])]];
+  for (const [type, buf] of samples) {
+    const r = await upAudio(buf, type); assert.equal(r.status, 201, type + ' ' + JSON.stringify(r.data));
+    const row = (await fake.db.query('select mime, committed from audio_files where id=$1', [r.data.id])).rows[0];
+    assert.equal(row.mime, type); assert.equal(row.committed, true);
+  }
+});
+test('audio via the function: rejects spoofed, non-audio, empty, oversize and unsupported uploads', async () => {
+  assert.equal((await upAudio(MP3(), 'audio/ogg')).status, 415);                                  // declared ogg, bytes are mp3
+  assert.equal((await upAudio(Buffer.from('<html><script>alert(1)</script></html>'), 'audio/mpeg')).status, 415);
+  assert.equal((await upAudio(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0, 0]), 'audio/mpeg')).status, 415);
+  assert.equal((await upAudio(MP3(), 'video/mp4')).status, 415);
+  assert.equal((await upAudio(MP3(), 'application/octet-stream')).status, 415);
+  assert.equal((await upAudio(Buffer.alloc(0))).status, 400);
+  const big = await upAudio(MP3(4200001)); assert.equal(big.status, 413);
+  assert.equal((await upAudio(MP3(4100000))).status, 201);
+});
+test('audio via the function is rate limited', async () => {
+  const ip = newIp(); let last; for (let i = 0; i < 9; i++) last = await upAudio(MP3(), 'audio/mpeg', ip);
+  assert.equal(last.status, 429);
+});
+
+test('direct upload: sign -> multipart PUT to the one-time URL -> commit verifies the stored file', async () => {
+  const bytes = MP3(6_000_000);                                                                    // bigger than a function can take
+  const s = await signAudio('audio/mpeg', bytes.length); assert.equal(s.status, 201);
+  assert.match(s.data.uploadUrl, /\/storage\/v1\/object\/upload\/sign\/gift-audio\/[0-9a-f-]{36}\.mp3\?token=/);
+  assert.equal((await fake.db.query('select committed from audio_files where id=$1', [s.data.id])).rows[0].committed, false);
+  assert.equal((await directPut(s.data.uploadUrl, bytes, 'audio/mpeg')).status, 200);
+  const c = await commitAudio(s.data.id); assert.equal(c.status, 200); assert.equal(c.data.bytes, bytes.length);
+  assert.equal((await fake.db.query('select committed, bytes from audio_files where id=$1', [s.data.id])).rows[0].bytes, bytes.length);
+  assert.equal((await commitAudio(s.data.id)).status, 200, 'commit is idempotent');
+});
+test('direct upload: the signed URL is single-use and only works for its own object', async () => {
+  const s = await signAudio('audio/mpeg', 100); const bytes = MP3(100);
+  assert.equal((await directPut(s.data.uploadUrl, bytes, 'audio/mpeg')).status, 200);
+  assert.equal((await directPut(s.data.uploadUrl, bytes, 'audio/mpeg')).status, 400, 'token reuse refused');
+  const other = await signAudio('audio/mpeg', 100);
+  const swapped = s.data.uploadUrl.replace(/token=.*/, 'token=' + new URL(other.data.uploadUrl).searchParams.get('token'));
+  assert.equal((await directPut(swapped, bytes, 'audio/mpeg')).status, 400, 'token for another path refused');
+});
+test('direct upload: storage enforces the bucket MIME list and the 10 MB cap', async () => {
+  const s = await signAudio('audio/mpeg', 100);
+  assert.equal((await directPut(s.data.uploadUrl, MP3(100), 'text/html')).status, 415);
+  const big = await signAudio('audio/mpeg', 9_999_999);
+  assert.equal((await directPut(big.data.uploadUrl, MP3(10_000_100), 'audio/mpeg')).status, 413);
+});
+test('direct upload: commit rejects a file whose bytes are not the declared audio type, and deletes it', async () => {
+  const s = await signAudio('audio/mpeg', 60); const before = fake.objects.size;
+  assert.equal((await directPut(s.data.uploadUrl, Buffer.from('<html><body>not music at all</body></html>'), 'audio/mpeg')).status, 200);
+  assert.equal(fake.objects.size, before + 1);
+  const c = await commitAudio(s.data.id); assert.equal(c.status, 415);
+  assert.equal(fake.objects.size, before, 'rejected file removed from storage');
+  assert.equal((await fake.db.query('select count(*)::int n from audio_files where id=$1', [s.data.id])).rows[0].n, 0);
+});
+test('direct upload: commit before the upload happened, unknown ids and bad ids', async () => {
+  const s = await signAudio('audio/mpeg', 100);
+  const c = await commitAudio(s.data.id); assert.equal(c.status, 400); assert.equal(c.data.error, 'upload_missing');
+  assert.equal((await commitAudio('11111111-1111-4111-8111-111111111111')).status, 404);
+  assert.equal((await commitAudio('nope')).status, 400);
+});
+test('sign validation: type, size, and rate limit', async () => {
+  assert.equal((await signAudio('video/mp4', 100)).status, 415);
+  assert.equal((await signAudio('audio/mpeg', 0)).status, 400);
+  assert.equal((await signAudio('audio/mpeg', 'big')).status, 400);
+  assert.equal((await signAudio('audio/mpeg', 10_000_001)).status, 413);
+  assert.equal((await signAudio('audio/mpeg', 10_000_000)).status, 201);
+  const ip = newIp(); let last; for (let i = 0; i < 9; i++) last = await signAudio('audio/mpeg', 100, ip);
+  assert.equal(last.status, 429);
+});
+
+test('gift with uploaded songs: recipient gets playable signed URLs (with Range support), builtin songs untouched', async () => {
+  const a = (await upAudio(MP3(5000))).data.id; const b = await directUpload(MP3(7000));
+  const r = await create({ songs: [song(a, 'Small'), { title: 'Bundled', artist: '', url: 'builtin:song-2' }, song(b, 'Large')] }); assert.equal(r.status, 201, JSON.stringify(r.data));
+  const g = await get(r.data.code); assert.equal(g.data.songs.length, 3);
+  assert.deepEqual(g.data.songs.map((s) => s.title), ['Small', 'Bundled', 'Large']);
+  assert.equal(g.data.songs[0].stored, true); assert.equal(g.data.songs[1].url, 'builtin:song-2'); assert.equal(g.data.songs[1].stored, undefined);
+  const full = await fetch(g.data.songs[0].url); assert.equal(full.status, 200); assert.equal((await full.arrayBuffer()).byteLength, 5010);
+  const part = await fetch(g.data.songs[2].url, { headers: { Range: 'bytes=10-19' } });
+  assert.equal(part.status, 206); assert.equal((await part.arrayBuffer()).byteLength, 10);
+  assert.ok(!JSON.stringify(g.data).includes('storage_path'));
+});
+test('gift cannot use uploads that are unverified, already attached, unknown or malformed', async () => {
+  const s = await signAudio('audio/mpeg', 100);                                                    // never uploaded / committed
+  assert.equal((await create({ songs: [song(s.data.id)] })).status, 400);
+  const ok = (await upAudio(MP3())).data.id;
+  assert.equal((await create({ songs: [song(ok)] })).status, 201);
+  assert.equal((await create({ songs: [song(ok)] })).status, 400, 'an upload belongs to one gift only');
+  assert.equal((await create({ songs: [song('11111111-1111-4111-8111-111111111111')] })).status, 400);
+  assert.equal((await create({ songs: [{ title: 'x', id: 'nope' }] })).status, 400);
+  const x = (await upAudio(MP3())).data.id;
+  assert.equal((await create({ songs: [song(x), song(x)] })).status, 400, 'same upload twice in one gift');
+  await fake.db.query("update audio_files set created_at = now() - interval '25 hours' where id=$1", [x]);
+  assert.equal((await create({ songs: [song(x)] })).status, 400, 'expired upload');
+});
+test('uploaded songs per gift are capped at 30 MB in total (enforced by the database)', async () => {
+  const ids = []; for (let i = 0; i < 4; i++) ids.push(await directUpload(MP3(8_000_000)));
+  const r = await create({ songs: ids.map((id, i) => song(id, 'S' + i)) });
+  assert.equal(r.status, 400); assert.equal(r.data.error, 'audio_too_big');
+  assert.equal((await create({ songs: ids.slice(0, 3).map((id, i) => song(id, 'S' + i)) })).status, 201);
+});
+test('ten songs mixing uploads, bundled and external links', async () => {
+  const ups = []; for (let i = 0; i < 4; i++) ups.push((await upAudio(MP3(2000 + i))).data.id);
+  const list = [...ups.map((id, i) => song(id, 'U' + i)), ...[1, 2, 3].map((n) => ({ title: 'B' + n, artist: '', url: 'builtin:song-' + n })),
+    ...[1, 2, 3].map((n) => ({ title: 'E' + n, artist: '', url: `https://cdn.example.com/${n}.mp3` }))];
+  assert.equal(list.length, 10);
+  const r = await create({ songs: list }); assert.equal(r.status, 201);
+  const g = await get(r.data.code); assert.equal(g.data.songs.length, 10);
+  assert.equal(g.data.songs.filter((s) => s.stored).length, 4);
+  assert.equal((await create({ songs: [...list, song((await upAudio(MP3())).data.id, 'eleventh')] })).status, 400);
+});
+test('deleting a gift removes its uploaded songs from storage and the database', async () => {
+  const mk = token(); const a = (await upAudio(MP3())).data.id; const b = await directUpload(MP3(9000));
+  const { data } = await create({ manageKey: mk, songs: [song(a), song(b, 'B')] });
+  const before = fake.objects.size; assert.equal((await del(data.code, mk)).status, 200);
+  assert.equal(fake.objects.size, before - 2);
+  assert.equal((await fake.db.query('select count(*)::int n from audio_files where id = any($1::uuid[])', [[a, b]])).rows[0].n, 0);
+  assert.equal((await get(data.code)).status, 410);
+});
+test('cleanup removes stale audio uploads (including never-committed ones); keeps fresh and attached', async () => {
+  const stale = (await upAudio(MP3())).data.id, fresh = (await upAudio(MP3())).data.id;
+  const uncommitted = (await signAudio('audio/mpeg', 100)).data.id;
+  const att = (await upAudio(MP3())).data.id; await create({ songs: [song(att)] });
+  await fake.db.query("update audio_files set created_at = now() - interval '25 hours' where id = any($1::uuid[])", [[stale, uncommitted]]);
+  const paths = (await fake.db.query('select id, storage_path from audio_files where id = any($1::uuid[])', [[stale, fresh, att]])).rows;
+  const keyOf = (id) => 'gift-audio/' + paths.find((r) => r.id === id).storage_path;
+  assert.ok(fake.objects.has(keyOf(stale)));
+  await cleanup();
+  const left = (await fake.db.query('select id from audio_files where id = any($1::uuid[])', [[stale, fresh, uncommitted, att]])).rows.map((r) => r.id);
+  assert.ok(!left.includes(stale)); assert.ok(!left.includes(uncommitted)); assert.ok(left.includes(fresh)); assert.ok(left.includes(att));
+  assert.ok(!fake.objects.has(keyOf(stale)), 'stale object removed from storage');
+  assert.ok(fake.objects.has(keyOf(fresh)) && fake.objects.has(keyOf(att)), 'fresh and attached objects kept');
+});
+test('audio_files is locked down like every other table', async () => {
+  for (const role of ['anon', 'authenticated']) {
+    await fake.db.exec(`set role ${role}`);
+    try {
+      await assert.rejects(fake.db.query('select * from public.audio_files'), /permission denied/i);
+      await assert.rejects(fake.db.query("select * from public.commit_audio('11111111-1111-4111-8111-111111111111', 5)"), /permission denied/i);
+      await assert.rejects(fake.db.query("select * from public.register_audio('11111111-1111-4111-8111-111111111111','x.mp3','audio/mpeg',5,true)"), /permission denied/i);
+    } finally { await fake.db.exec('reset role'); }
+  }
+  const r = await fake.db.query("select relrowsecurity, relforcerowsecurity from pg_class where relname='audio_files' and relkind='r'");
+  assert.equal(r.rows[0].relrowsecurity, true); assert.equal(r.rows[0].relforcerowsecurity, true);
+  await assert.rejects(fake.db.query("insert into audio_files (storage_path, mime, bytes) values ('a.mp3','audio/mpeg',10000001)"), /audio_files_bytes_check|check/i);
+  await assert.rejects(fake.db.query("insert into audio_files (storage_path, mime, bytes) values ('b.exe','application/x-msdownload',5)"), /audio_files_mime_check|check/i);
 });

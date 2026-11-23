@@ -9,7 +9,7 @@ site or a live Supabase project.** Section 4 lists exactly what is still unverif
 | Suite | Command | Result | What it actually exercises |
 |-------|---------|--------|----------------------------|
 | Unit + integration | `npm test` | **39 / 39 pass** | The real function handlers and the real `supabase/schema.sql` executed in PGlite (a real PostgreSQL engine, WASM). Storage is an in-memory fake. |
-| Browser end-to-end | `npm run test:e2e` | **69 / 69 pass** | Built `dist/` served with the `netlify.toml` headers, real functions, PGlite DB, Chromium. |
+| Browser end-to-end | `npm run test:e2e` | **76 / 76 pass** (incl. song upload: small + >4 MB, invalid/oversized files, recipient playback) | Built `dist/` served with the `netlify.toml` headers, real functions, PGlite DB, Chromium. |
 | Load measurement | `node tests/perf/measure.mjs` | see section 2 | Before vs after, CDP network throttling + 4x CPU slowdown, 3 runs each (median shown). |
 
 ### Verified (stand-in backend)

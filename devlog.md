@@ -1726,3 +1726,9 @@ Desktop Slow 4G LCP 28.7 s -> 1.2 s; mobile Fast 3G 57.2 s -> 3.9 s. Local serve
 ### Unresolved / not done
 Live Supabase and Netlify setup and verification (docs/DEPLOYMENT.md checklist); Lighthouse and INP on the deployed site; Safari/iOS/Firefox and real-device testing;
 pixel-level visual regression; Celandine font (licensed, not bundled, serif fallback in use); no creator accounts (manage key only).
+
+## 2026-11-21 — Songs from devices, medieval photo tray, moving figures
+- Creators can upload songs from their device (MP3/M4A/AAC/OGG/WAV/WebM, ≤10 MB each, ≤30 MB per gift). Stored in private bucket `gift-audio`; small files via `/api/audio`, large via one-time signed upload + `/api/audio/commit` verification. Recipients get 6 h signed links, refreshed automatically if they expire mid-listen.
+- Photo background is now a medieval tray (crimson rim with rivets, gold corner ornaments, parchment floor).
+- The two figures beside the vinyl sway/float only while the record plays (CSS animation-play-state); disabled under reduced motion.
+- Tests: 58 unit, 76 e2e pass. Real Supabase not exercised; schema.sql must be re-run.

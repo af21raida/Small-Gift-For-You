@@ -59,7 +59,7 @@ await step('creator flow', async () => {
     await page.getByLabel('Audio URL').fill(`https://cdn.example.com/s${i}.mp3`);
     await page.getByRole('button', { name: '+ Add song' }).click();
   }
-  check('10 songs reached, add button disabled', (await page.locator('#song-count').innerText()) === '10 / 10 songs' && await page.getByRole('button', { name: 'Playlist full' }).isDisabled());
+  check('10 songs reached, add button disabled', (await page.locator('#song-count').innerText()) === '10 / 10 songs' && await page.locator('.add-song button', { hasText: 'Playlist full' }).isDisabled());
   await page.getByRole('button', { name: 'Save gift and get a share link' }).click();
   await page.getByText('Your gift is ready').waitFor({ timeout: 20000 });
   shareUrl = (await page.locator('#share-link').innerText()).trim();
@@ -250,6 +250,98 @@ await step('long letter round trip & reduced motion', async () => {
   await p4.goto(srv.base + '/'); await p4.waitForTimeout(500);
   check('touch device: cursor cluster not created', (await p4.locator('#cursorCluster').count()) === 0);
   await c4.close();
+});
+
+// ---------------------------------------------------------------- songs from the creator's device
+function wav(seconds, rate = 8000) {
+  const n = seconds * rate, b = Buffer.alloc(44 + n * 2);
+  b.write('RIFF', 0); b.writeUInt32LE(36 + n * 2, 4); b.write('WAVEfmt ', 8); b.writeUInt32LE(16, 16); b.writeUInt16LE(1, 20); b.writeUInt16LE(1, 22);
+  b.writeUInt32LE(rate, 24); b.writeUInt32LE(rate * 2, 28); b.writeUInt16LE(2, 32); b.writeUInt16LE(16, 34); b.write('data', 36); b.writeUInt32LE(n * 2, 40);
+  for (let i = 0; i < n; i++) b.writeInt16LE(Math.round(Math.sin(i / 8) * 3000), 44 + i * 2);
+  return b;
+}
+await step('song upload from device', async () => {
+  const ctx = await newCtx(); const page = await ctx.newPage(); watch(page, 'songs');
+  await page.goto(srv.base + '/');
+  await page.getByRole('button', { name: 'Write a Letter' }).click(); await openEnvelope(page);
+  await page.getByLabel('Your letter').fill('For you, with my own songs.');
+  await page.getByRole('button', { name: 'Continue to the music' }).click();
+  const before = srv.fake.objects.size;
+  await page.setInputFiles('#song-file', { name: 'my_first_song.wav', mimeType: 'audio/wav', buffer: wav(2) });
+  await page.waitForSelector('.track:has-text("my first song"):not(:has(.up-status))', { timeout: 15000 });
+  check('small song uploads through the function (proxy path)', srv.fake.objects.size === before + 1);
+  check('title taken from file name', (await page.locator('#song-count').innerText()) === '4 / 10 songs');
+  // large file -> direct signed upload path (> 4 MB)
+  await page.setInputFiles('#song-file', { name: 'big.wav', mimeType: 'audio/wav', buffer: wav(160, 16000).subarray(0, 5_200_000) });
+  await page.waitForSelector('.track:has-text("big"):not(:has(.up-status))', { timeout: 30000 });
+  check('large song (>4 MB) uploads directly via signed URL and is verified', srv.fake.objects.size === before + 2);
+  // invalid files
+  await page.setInputFiles('#song-file', { name: 'fake.mp3', mimeType: 'audio/mpeg', buffer: Buffer.from('this is not audio at all') });
+  check('non-audio file rejected with a friendly message', /isn’t a supported audio file/.test(await page.locator('.hint, .msg, .error, #song-msg, [role=alert]').allInnerTexts().then((a) => a.join(' ')) + await page.content()));
+  await page.setInputFiles('#song-file', { name: 'huge.wav', mimeType: 'audio/wav', buffer: Buffer.alloc(10_500_000, 1) });
+  check('file over 10 MB rejected', (await page.locator('#song-count').innerText()) === '5 / 10 songs');
+  await page.screenshot({ path: path.join(OUT, 'songs-creator.png') });
+  await page.getByRole('button', { name: /Save gift/ }).click();
+  await page.waitForSelector('text=/\\/g\\/[0-9A-Z]{20}/', { timeout: 15000 });
+  const url = (await page.locator('text=/\\/g\\/[0-9A-Z]{20}/').first().innerText()).match(/https?:\/\/\S+\/g\/[0-9A-Z]{20}/)[0];
+  const code = url.split('/g/')[1];
+  const api = await (await page.request.get(srv.base + '/api/gifts/' + code)).json();
+  check('API returns stored songs with signed urls + ids', api.songs.filter((x) => x.stored && x.id && /^https?:/.test(x.url)).length === 2);
+  const rctx = await newCtx(); const rp = await rctx.newPage(); watch(rp, 'songs-recipient');
+  await rp.goto(srv.base + '/g/' + code); await openEnvelope(rp);
+  await rp.getByRole('button', { name: 'Continue to the record' }).click();
+  await rp.waitForSelector('.track');
+  await rp.locator('.track:has-text("my first song") .meta').click();
+  await rp.waitForSelector('.player-stage.is-playing', { timeout: 15000 });
+  await rp.waitForTimeout(1200);
+  check('recipient plays an uploaded song (no error, still playing)', (await rp.locator('.player-stage.is-playing').count()) === 1 && !/can’t be played|couldn’t be loaded/.test(await rp.locator('body').innerText()));
+  await rctx.close(); await ctx.close();
+});
+
+await step('receiver cursor cluster, no caption, home button', async () => {
+  const mk = await newCtx(); const mp = await mk.newPage();
+  const r = await mp.request.post(srv.base + '/api/gifts', { headers: { 'x-test-ip': '198.51.100.251' }, data: { message: 'hello', songs: [{ title: 'T', artist: '', url: 'builtin:song-1' }], photos: [], manageKey: 'q'.repeat(43), idempotencyKey: 'y'.repeat(24) } });
+  const { code } = await r.json(); await mk.close();
+  const ctx = await newCtx({ viewport: { width: 1280, height: 800 } }); const page = await ctx.newPage(); watch(page, 'cc');
+  await page.goto(srv.base + '/g/' + code);
+  await page.getByRole('button', { name: 'Open the envelope' }).click();
+  check('receiver: no "Click to read your letter" text', !/Click to read your letter/i.test(await page.locator('body').innerText()));
+  await page.getByRole('button', { name: 'Continue to letter' }).click();
+  await page.mouse.move(200, 200); await page.mouse.move(640, 500); await page.waitForTimeout(700);
+  check('receiver letter page: six pictures follow the cursor', (await page.locator('#cursorCluster img.cc').count()) === 6 && (await page.locator('#cursorCluster.on').count()) === 1);
+  await page.getByRole('button', { name: 'Continue to the record' }).click();
+  await page.mouse.move(100, 300); await page.mouse.move(180, 450); await page.waitForTimeout(700);
+  check('record page: six pictures follow the cursor', (await page.locator('#cursorCluster.on').count()) === 1);
+  await ctx.close();
+  const c2 = await newCtx({ viewport: { width: 1280, height: 800 } }); const p2 = await c2.newPage(); watch(p2, 'home-btn');
+  await p2.goto(srv.base + '/');
+  await p2.getByRole('button', { name: 'Write a Letter' }).click(); await openEnvelope(p2);
+  await p2.getByLabel('Your letter').fill('x');
+  await p2.getByRole('button', { name: 'Continue to the music' }).click();
+  const hb = p2.locator('#home-btn');
+  check('song page ends with a Home button (below Back to letter)', (await hb.count()) === 1 && (await hb.innerText()) === 'Home');
+  await hb.click();
+  check('Home button returns to the home page', await p2.getByRole('button', { name: 'Write a Letter' }).isVisible());
+  await c2.close();
+});
+
+await step('receiver extras: cursor pictures, no hint, Home button', async () => {
+  const ctx = await newCtx({ viewport: { width: 1280, height: 800 } }); const page = await ctx.newPage(); watch(page, 'extras');
+  const r = await page.request.post(srv.base + '/api/gifts', { headers: { 'x-test-ip': '198.51.100.251' }, data: { message: 'hello', songs: [{ title: 'T', artist: '', url: 'builtin:song-1' }], photos: [], manageKey: 'q'.repeat(43), idempotencyKey: 'y'.repeat(24) } });
+  const { code } = await r.json();
+  await page.goto(srv.base + '/g/' + code);
+  check('no "click to ..." caption under the envelope', !/click to/i.test(await page.locator('body').innerText()));
+  await openEnvelope(page);
+  await page.mouse.move(300, 300); await page.mouse.move(520, 380); await page.waitForTimeout(800);
+  check('letter page (receiver): six cursor pictures visible', (await page.locator('#cursorCluster img.cc').count()) === 6 && (await page.locator('#cursorCluster.on').count()) === 1);
+  await page.getByRole('button', { name: 'Continue to the record' }).click();
+  await page.mouse.move(300, 200); await page.mouse.move(420, 260); await page.waitForTimeout(800);
+  check('record page (receiver): cursor pictures visible', (await page.locator('#cursorCluster.on').count()) === 1);
+  const home = page.locator('#home-btn');
+  check('receiver has a Home button at the end of the record page', (await home.count()) === 1 && (await home.innerText()) === 'Home');
+  await home.click();
+  check('Home button returns to the website home page', (await page.getByRole('button', { name: 'Write a Letter' }).count()) === 1);
+  await ctx.close();
 });
 
 check('no console errors / page errors / failed static requests', problems.length === 0, problems.slice(0, 5).join(' | '));
