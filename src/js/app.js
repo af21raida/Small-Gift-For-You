@@ -1393,7 +1393,7 @@ function renderVinyl(){
       el('div',{class:'or-divider','aria-hidden':'true'},[el('span',{text:'or use a link'})]),
       el('label',{text:'Audio URL'}), u,
       el('div',{class:'hint',style:'margin-top:8px;font-size:12px;',text:'Use a direct link to an audio file. Streaming pages (YouTube, Spotify, …) can’t be played here.'}),
-      el('div',{style:'margin-top:14px;text-align:right;'},[el('button',{class:'btn ghost',disabled:atMax,onclick:addSong,text: atMax ? 'Playlist full' : '+ Add song from link'})])
+      el('div',{style:'margin-top:14px;text-align:center;'},[el('button',{class:'btn ghost',disabled:atMax,onclick:addSong,text: atMax ? 'Playlist full' : '+ Add song from link'})])
     ]);
     children.push(addBox);
     children.push(el('div',{id:'save-hint',class:'hint',style:'margin-top:16px;','aria-live':'polite'}));
