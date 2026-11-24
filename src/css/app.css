@@ -303,9 +303,9 @@
 
   /* Envelope decorative pictures: anchored to the envelope via the stage. */
   .env-spot{position:absolute;z-index:1;width:0;height:0;}
-  .env-spot.pos-tl{left:-160px;top:-90px;}
-  .env-spot.pos-tc{left:50%;top:-120px;}
-  .env-spot.pos-tr{right:-160px;top:-90px;}
+  .env-spot.pos-tl{left:-160px;top:-12vh;}
+  .env-spot.pos-tc{left:50%;top:-14vh;}
+  .env-spot.pos-tr{right:-160px;top:-12vh;}
   .env-spot.pos-bl{left:-160px;bottom:-70px;}
   .env-spot.pos-bc{left:50%;bottom:-110px;}
   .env-spot.pos-br{right:-160px;bottom:-90px;}
@@ -314,9 +314,9 @@
   @media (max-width:560px){
     .screen{overflow-x:clip;}
     .env-pic{width:60px;}
-    .env-spot.pos-tl{left:-64px;top:-56px;}
-    .env-spot.pos-tc{top:-72px;}
-    .env-spot.pos-tr{right:-64px;top:-56px;}
+    .env-spot.pos-tl{left:-64px;top:-8vh;}
+    .env-spot.pos-tc{top:-10vh;}
+    .env-spot.pos-tr{right:-64px;top:-8vh;}
     .env-spot.pos-bl{left:-64px;bottom:-56px;}
     .env-spot.pos-bc{bottom:-72px;}
     .env-spot.pos-br{right:-64px;bottom:-56px;}
@@ -975,7 +975,9 @@
     margin-top:20px;
     width:100%;
     max-width:460px;
-    background:#fbf4e2;
+    background:rgba(251,244,226,0.82);
+    backdrop-filter:blur(10px);
+    -webkit-backdrop-filter:blur(10px);
     border:1.5px solid #a5bcd6;
     border-radius:8px;
     padding:16px;
